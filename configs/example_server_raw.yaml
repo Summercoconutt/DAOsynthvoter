@@ -1,0 +1,9 @@
+# Example: raw votes live on lab disk (read-only). Merge with default.yaml:
+#
+#   python scripts/03_run_global_cleaning.py --config configs/default.yaml --extra-config configs/example_server_raw.yaml
+#
+# Edit master_votes_parquet to your actual file under D:/111111/Data/...
+
+paths:
+  master_votes_parquet: "D:/111111/Data/YOUR_SUBFOLDER/merged_votes.parquet"
+  cleaned_master_parquet: "data/processed/votes_cleaned_from_server.parquet"

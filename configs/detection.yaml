@@ -1,0 +1,9 @@
+# Used by scripts/09_run_detection_mode.py (merge with default.yaml via --extra-config or edit paths here).
+
+detection:
+  # Folder with uncleaned exports from the school server (read-only scans).
+  external_raw_root: "D:/111111/Data"
+  # Limit recursive scan depth / volume
+  parquet_glob: "**/*.parquet"
+  max_files_to_scan: 12
+  sample_rows_per_file: 60000

@@ -1,0 +1,27 @@
+# Merge over configs/default.yaml for a minimal GPU-friendly smoke run:
+#   python scripts/08_run_behaviour_modelling.py --config configs/default.yaml --extra-config configs/smoke_behaviour.yaml
+#
+# Or use scripts/09_run_detection_mode.py --smoke-train
+
+behaviour_model:
+  pretrained: "distilroberta-base"
+  window: 3
+  max_length: 96
+  batch_size: 4
+  epochs: 1
+  lr: 2.0e-5
+  max_grad_norm: 1.0
+  max_train_windows: 320
+  max_valid_windows: 96
+  max_test_windows: 0
+
+paths:
+  model_artifacts_dir: "outputs/models/_smoke_behaviour"
+  behaviour_dataset_csv: "outputs/tables/behaviour_dataset_smoke.csv"
+  logs_dir: "outputs/logs/smoke_behaviour"
+  split_manifest_json: "outputs/processed/split_manifest_smoke.json"
+
+reports:
+  preprocessing_md: "outputs/tables/preprocessing_report_smoke.md"
+  training_md: "outputs/tables/training_report_smoke.md"
+  stage08_md: "outputs/reports/stage08_behaviour_smoke.md"

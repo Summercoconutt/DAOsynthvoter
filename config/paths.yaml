@@ -1,0 +1,12 @@
+# Split config: paths only (merged notionally with cleaning/clustering/modelling).
+# Canonical merged file: ../configs/default.yaml
+
+snapshot_spaces_root: ""
+selected_dao_json: "data/raw/dao_selection/selected_spaces.json"
+snapshot_votes_parquet: "data/interim/snapshot_votes.parquet"
+cleaned_master_parquet: "data/processed/votes_cleaned.parquet"
+dao_feature_table_parquet: "data/processed/dao_feature_table.parquet"
+dao_cluster_assignments_csv: "outputs/cluster_results/no_outliers/cluster_assignments.csv"
+master_with_dao_parquet: "data/processed/master_votes_with_dao_cluster.parquet"
+behaviour_dataset_csv: "outputs/tables/behaviour_dataset.csv"
+model_artifacts_dir: "outputs/models/behaviour_agent2"

@@ -1,0 +1,10 @@
+pretrained: "distilroberta-base"
+window: 5
+max_length: 128
+batch_size: 16
+epochs: 4
+lr: 2.0e-5
+max_grad_norm: 1.0
+train_frac: 0.7
+val_frac: 0.15
+use_amp: false

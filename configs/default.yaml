@@ -1,0 +1,112 @@
+# Whole-pipeline default configuration (edit paths for your machine).
+# All paths are relative to the whole_pipeline/ directory unless absolute.
+
+project:
+  name: dissertation-whole-pipeline
+  seed: 42
+
+paths:
+  # --- Snapshot / expansion ---
+  snapshot_spaces_root: ""
+  selected_dao_json: "data/raw/dao_selection/selected_spaces.json"
+  snapshot_votes_parquet: "data/interim/snapshot_votes.parquet"
+  master_votes_parquet: "data/interim/master_votes.parquet"
+  proposals_parquet: ""
+
+  # --- Global cleaning outputs (never overwrite raw inputs; write new files) ---
+  cleaned_master_parquet: "data/processed/votes_cleaned.parquet"
+  cleaned_proposals_parquet: "data/processed/proposals_cleaned.parquet"
+
+  # --- DAO metrics (stage 4) ---
+  dao_metrics_parquet: "data/interim/dao_metrics.parquet"
+  proposal_metrics_parquet: "data/interim/proposal_metrics.parquet"
+  participation_out_dir: "data/interim/participation_rate"
+  representative_csv: "data/interim/dao_representative_voters.csv"
+
+  dao_feature_table_parquet: "data/processed/dao_feature_table.parquet"
+  dao_feature_table_csv: "data/processed/dao_feature_table.csv"
+
+  # --- Feature selection & DAO clustering ---
+  feature_selection_out_dir: "outputs/feature_screening"
+  clustering_validation_out_dir: "outputs/clustering_validation"
+  cluster_results_dir: "outputs/cluster_results"
+  dao_cluster_assignments_csv: "outputs/cluster_results/no_outliers/cluster_assignments.csv"
+
+  # --- Voter clustering & behaviour ---
+  master_with_dao_parquet: "data/processed/master_votes_with_dao_cluster.parquet"
+  voter_features_csv: "data/processed/voter_space_features.csv"
+  voter_features_filtered_csv: "data/processed/voter_space_features_filtered.csv"
+  voter_cluster_assignments_csv: "outputs/voter_clustering/voter_cluster_assignments.csv"
+  voter_clustering_figures_dir: "outputs/voter_clustering/figures"
+  voter_clustering_summary_csv: "outputs/voter_clustering/cluster_summary_statistics.csv"
+
+  behaviour_dataset_csv: "outputs/tables/behaviour_dataset.csv"
+  model_artifacts_dir: "outputs/models/behaviour_agent2"
+  eval_output_dir: "outputs/tables/eval"
+  split_manifest_json: "outputs/processed/split_manifest.json"
+  figures_dir: "outputs/figures"
+  tables_dir: "outputs/tables"
+  logs_dir: "outputs/logs"
+
+reports:
+  stage01_md: "outputs/reports/stage01_dao_selection.md"
+  stage02_md: "outputs/reports/stage02_data_expansion.md"
+  stage03_md: "outputs/reports/stage03_global_cleaning.md"
+  stage04_md: "outputs/reports/stage04_dao_metrics.md"
+  stage05_md: "outputs/reports/stage05_feature_selection.md"
+  stage06_md: "outputs/reports/stage06_dao_clustering.md"
+  stage07_md: "outputs/reports/stage07_voter_clustering.md"
+  stage08_md: "outputs/reports/stage08_behaviour_modelling.md"
+  data_quality_md: "outputs/tables/data_quality_report.md"
+  preprocessing_md: "outputs/tables/preprocessing_report.md"
+  training_md: "outputs/tables/training_report.md"
+
+data_quality:
+  dedupe_keys:
+    - voter
+    - space
+    - proposal_id
+  valid_choice_norm:
+    - for
+    - against
+    - abstain
+  drop_rows_with_invalid_timestamp: true
+  treat_negative_as_invalid: true
+  upper_quantile_cap: 0.999
+  absolute_cap: 1.0e18
+
+cleaning:
+  # drop | clip_to_zero — negatives must not flow raw into downstream models
+  negative_voting_power_policy: drop
+  extreme_vp_quantile: 0.999
+  flag_extreme_voting_power: true
+
+clustering:
+  corr_threshold_feature_selection: 0.85
+
+voter_clustering:
+  min_votes_per_voter_space: 5
+  env_min_rows_mode_a: ""
+
+behaviour_model:
+  pretrained: "distilroberta-base"
+  window: 5
+  max_length: 128
+  batch_size: 16
+  epochs: 4
+  lr: 2.0e-5
+  max_grad_norm: 1.0
+  train_frac: 0.7
+  val_frac: 0.15
+  max_train_windows: 0
+  max_valid_windows: 0
+  max_test_windows: 0
+  use_amp: false
+  lr_warn_above: 1.0e-3
+
+# scripts/09_run_detection_mode.py — scan uncleaned server exports (read-only)
+detection:
+  external_raw_root: "D:/111111/Data"
+  parquet_glob: "**/*.parquet"
+  max_files_to_scan: 12
+  sample_rows_per_file: 60000

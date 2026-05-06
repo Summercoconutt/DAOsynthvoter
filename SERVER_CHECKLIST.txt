@@ -1,0 +1,20 @@
+SERVER RUNBOOK — whole_pipeline (minimal)
+
+1. Copy whole_pipeline/ to the server. Do not rely on Windows paths (e.g. D:\...); edit YAML to Linux paths.
+
+2. Python 3.10+, then:  pip install -r requirements.txt
+
+3. Every run:  export PYTHONPATH=/absolute/path/to/whole_pipeline/src
+
+4. Point raw vote parquet(s) via configs — use absolute paths in a small override YAML merged with --extra-config (see configs/example_server_raw.yaml). Stage 03 writes ONLY under whole_pipeline outputs (never overwrites raw).
+
+5. Order of sanity checks:
+   - python scripts/09_run_detection_mode.py [--skip-raw-scan if raw dir absent]
+   - python scripts/09_run_detection_mode.py --smoke-train   (tiny train; uses configs/smoke_behaviour.yaml)
+   - Full stage 08 only after prerequisites pass (merged votes + voter cluster CSV exist).
+
+6. Behaviour training entrypoint MUST be:  scripts/08_run_behaviour_modelling.py --config configs/default.yaml  (+ optional --extra-config)
+
+7. GPU: install CUDA-matching PyTorch if needed. Smoke config limits epochs/windows for a quick pass.
+
+8. Do not commit huge outputs/.venv; share code + configs only unless artefacts are required.

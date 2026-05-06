@@ -1,0 +1,3 @@
+negative_voting_power_policy: drop
+extreme_vp_quantile: 0.999
+flag_extreme_voting_power: true

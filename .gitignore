@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# Local env / secrets
+.env
+*.pem
+
+# Pipeline artefacts (regenerate on server; see README)
+outputs/
+
+# Data files — paths live in configs; attach large files separately if needed
+data/**/*.parquet
+data/**/*.csv
+*.parquet
+*.pt
+
+# Jupyter / OS
+.ipynb_checkpoints/
+.DS_Store
+Thumbs.db

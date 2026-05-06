@@ -1,0 +1,291 @@
+#!/usr/bin/env python3
+"""
+8) Build behaviour dataset (optional), train voter-choice model with safeguards.
+
+  cd whole_pipeline
+  set PYTHONPATH=src
+  python scripts/08_run_behaviour_modelling.py --config configs/default.yaml
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import random
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+import numpy as np
+import torch
+from sklearn.metrics import confusion_matrix
+from torch.utils.data import DataLoader
+from transformers import AutoTokenizer, get_linear_schedule_with_warmup
+from tqdm import tqdm
+
+from dao_governance.features.behaviour_dataset import build_behaviour_dataset
+from dao_governance.modelling.dataset import WindowDataset, collate_fn
+from dao_governance.modelling.metrics import macro_prf
+from dao_governance.modelling.model import TimeSeriesClassifier
+from dao_governance.modelling.preprocess import (
+    assert_finite_feature_columns,
+    fit_numeric_preprocessor,
+    load_dataset,
+    normalise_columns,
+    save_split_manifest,
+    select_numeric_columns,
+    split_by_voter_three_way,
+)
+from dao_governance.modelling.windows import build_windows
+from dao_governance.settings import load_config, project_root
+
+
+def compute_class_weights(y: np.ndarray, num_classes: int = 3) -> torch.Tensor:
+    counts = np.bincount(y, minlength=num_classes).astype(float)
+    n = counts.sum()
+    w = n / (num_classes * np.maximum(counts, 1.0))
+    return torch.tensor(w, dtype=torch.float32)
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--config", type=str, default="configs/default.yaml")
+    ap.add_argument("--extra-config", type=str, default="")
+    ap.add_argument("--reuse-behaviour-csv", action="store_true", help="Skip rebuilding behaviour CSV if it exists.")
+    args = ap.parse_args()
+
+    base = project_root()
+    cfg_path = (base / args.config).resolve() if not Path(args.config).is_absolute() else Path(args.config)
+    extra = (base / args.extra_config).resolve() if args.extra_config else None
+    cfg = load_config(config_path=cfg_path, extra_path=extra)
+
+    seed = int(cfg.get("project", {}).get("seed", 42))
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.benchmark = False
+
+    paths = cfg.get("paths", {})
+    bm = cfg.get("behaviour_model", {})
+    dq = cfg.get("data_quality", {})
+
+    behaviour_csv = (base / paths.get("behaviour_dataset_csv", "outputs/behaviour_modelling/behaviour_dataset.csv")).resolve()
+    merged = (base / paths.get("master_with_dao_parquet", "data/processed/master_votes_with_dao_cluster.parquet")).resolve()
+    assign = (base / paths.get("voter_cluster_assignments_csv", "outputs/voter_clustering/voter_cluster_assignments.csv")).resolve()
+    out_dir = (base / paths.get("model_artifacts_dir", "outputs/behaviour_modelling/agent2_artifacts")).resolve()
+    logs_dir = (base / paths.get("logs_dir", "outputs/logs")).resolve()
+    split_path = (base / paths.get("split_manifest_json", "outputs/processed/split_manifest.json")).resolve()
+    prep_report = (base / (cfg.get("reports") or {}).get("preprocessing_md", "outputs/tables/preprocessing_report.md")).resolve()
+    train_report = (base / (cfg.get("reports") or {}).get("training_md", "outputs/tables/training_report.md")).resolve()
+
+    for d in (behaviour_csv.parent, out_dir, logs_dir, split_path.parent, prep_report.parent):
+        d.mkdir(parents=True, exist_ok=True)
+
+    if not args.reuse_behaviour_csv or not behaviour_csv.exists():
+        if not merged.exists() or not assign.exists():
+            raise FileNotFoundError(
+                f"Need {merged} and {assign}. Run scripts 02–03 first (or test_pipeline / run_demo)."
+            )
+        df_b, rep_b = build_behaviour_dataset(merged, assign, output_csv=behaviour_csv)
+        br_path = prep_report.parent / "behaviour_dataset_quality.md"
+        br_path.write_text(rep_b.to_markdown("Behaviour dataset (build)"), encoding="utf-8")
+    else:
+        print("[08] Reusing existing behaviour CSV:", behaviour_csv)
+
+    raw_df = load_dataset(behaviour_csv)
+    train_frac = float(bm.get("train_frac", 0.7))
+    val_frac = float(bm.get("val_frac", 0.15))
+    train_raw, val_raw, test_raw = split_by_voter_three_way(
+        raw_df, train_frac=train_frac, val_frac=val_frac, seed=seed
+    )
+    save_split_manifest(
+        split_path,
+        train_voters=train_raw["voter"].unique(),
+        val_voters=val_raw["voter"].unique(),
+        test_voters=test_raw["voter"].unique(),
+        seed=seed,
+        train_frac=train_frac,
+        val_frac=val_frac,
+    )
+    print(f"[08] Split manifest: {split_path}")
+
+    upper_q = float(dq.get("upper_quantile_cap", 0.999))
+    abs_cap = float(dq.get("absolute_cap", 1e18))
+    preprocessor = fit_numeric_preprocessor(train_raw, upper_quantile_cap=upper_q, absolute_cap=abs_cap)
+    prep_report.write_text(
+        "# Preprocessing report\n\n"
+        f"- Voting power cap (quantile {upper_q}): **{preprocessor['voting_power']['cap_value']}**\n"
+        f"- Transform: **{preprocessor['voting_power'].get('transform', 'clip_then_log1p_robust')}**\n"
+        f"- Notes: {preprocessor.get('meta', {}).get('notes', [])}\n"
+        f"- Near–zero variance columns (informational): {preprocessor.get('meta', {}).get('zero_variance_columns', [])}\n",
+        encoding="utf-8",
+    )
+
+    train_df = normalise_columns(train_raw, preprocessor=preprocessor)
+    val_df = normalise_columns(val_raw, preprocessor=preprocessor)
+    test_df = normalise_columns(test_raw, preprocessor=preprocessor)
+
+    num_cols = select_numeric_columns()
+    for name, dfx in [("train", train_df), ("val", val_df), ("test", test_df)]:
+        assert_finite_feature_columns(dfx, num_cols)
+        print(f"[08] finite check OK: {name}")
+
+    window_size = int(bm.get("window", 5))
+    train_windows = build_windows(train_df, window_size=window_size, numeric_cols=num_cols)
+    valid_windows = build_windows(val_df, window_size=window_size, numeric_cols=num_cols)
+    if not train_windows or not valid_windows:
+        raise RuntimeError("Empty windows. Increase data volume or reduce --window in config.")
+
+    max_tr = int(bm.get("max_train_windows", 0))
+    max_va = int(bm.get("max_valid_windows", 0))
+    rng_sub = np.random.default_rng(seed)
+
+    def _maybe_sub(ws: list, cap: int) -> list:
+        if cap <= 0 or len(ws) <= cap:
+            return ws
+        idx = rng_sub.choice(len(ws), size=cap, replace=False)
+        return [ws[i] for i in sorted(idx)]
+
+    train_windows = _maybe_sub(train_windows, max_tr)
+    valid_windows = _maybe_sub(valid_windows, max_va)
+
+    pretrained = bm.get("pretrained", "distilroberta-base")
+    max_length = int(bm.get("max_length", 128))
+    batch_size = int(bm.get("batch_size", 16))
+    epochs = int(bm.get("epochs", 4))
+    lr = float(bm.get("lr", 2e-5))
+    warn_lr = float(bm.get("lr_warn_above", 1e-3))
+    max_grad_norm = float(bm.get("max_grad_norm", 1.0))
+
+    if lr > warn_lr:
+        print(f"[08] WARNING: learning rate {lr} exceeds recommended upper bound {warn_lr} for AdamW + transformers.")
+
+    tokenizer = AutoTokenizer.from_pretrained(pretrained, use_fast=True)
+    tokenizer.add_special_tokens({"additional_special_tokens": ["[PREDICT]", "[LABEL_0]", "[LABEL_1]", "[LABEL_2]"]})
+
+    train_ds = WindowDataset(train_windows, tokenizer, max_length)
+    valid_ds = WindowDataset(valid_windows, tokenizer, max_length)
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
+    valid_loader = DataLoader(valid_ds, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    feat_dim = len(train_windows[0].window_features[0])
+    model = TimeSeriesClassifier(pretrained_model_name=pretrained, feat_dim=feat_dim).to(device)
+    model.text_encoder.resize_token_embeddings(len(tokenizer))
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
+    total_steps = len(train_loader) * epochs
+    scheduler = get_linear_schedule_with_warmup(optimizer, int(total_steps * 0.1), total_steps)
+    class_weights = compute_class_weights(np.array([w.target_label for w in train_windows], dtype=int)).to(device)
+
+    best_f1 = -1.0
+    best_state = None
+    train_lines = []
+
+    for epoch in range(epochs):
+        model.train()
+        tr_true, tr_pred, tr_loss = [], [], 0.0
+        for batch_idx, batch in enumerate(tqdm(train_loader, desc=f"train {epoch+1}/{epochs}")):
+            for k in batch:
+                batch[k] = batch[k].to(device)
+            out = model(batch)
+            loss = model.loss_fn(out["logits"], batch["labels"], class_weights=class_weights)
+            if not torch.isfinite(loss):
+                nf = batch["num_feats"].detach().cpu().numpy()
+                raise RuntimeError(
+                    f"Non-finite loss at epoch={epoch+1} batch={batch_idx}. "
+                    f"num_feats finite={np.isfinite(nf).all()} min={np.nanmin(nf)} max={np.nanmax(nf)}"
+                )
+            optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+            optimizer.step()
+            scheduler.step()
+            tr_loss += float(loss.item())
+            tr_true.extend(batch["labels"].detach().cpu().numpy().tolist())
+            tr_pred.extend(out["logits"].argmax(dim=-1).detach().cpu().numpy().tolist())
+
+        train_m = macro_prf(tr_true, tr_pred)
+
+        model.eval()
+        va_true, va_pred = [], []
+        with torch.no_grad():
+            for batch in tqdm(valid_loader, desc=f"valid {epoch+1}/{epochs}"):
+                for k in batch:
+                    batch[k] = batch[k].to(device)
+                out = model(batch)
+                va_true.extend(batch["labels"].detach().cpu().numpy().tolist())
+                va_pred.extend(out["logits"].argmax(dim=-1).detach().cpu().numpy().tolist())
+        valid_m = macro_prf(va_true, va_pred)
+        cm = confusion_matrix(va_true, va_pred, labels=[0, 1, 2])
+        line = (
+            f"epoch={epoch+1} loss={tr_loss/max(len(train_loader),1):.6f} "
+            f"train_f1={train_m['f1']:.4f} valid_f1={valid_m['f1']:.4f} "
+            f"acc_train={train_m['accuracy']:.4f} acc_valid={valid_m['accuracy']:.4f}"
+        )
+        print(line)
+        train_lines.append(line)
+        (logs_dir / f"confusion_valid_epoch{epoch+1}.csv").write_text(
+            "pred_FOR,pred_AGAINST,pred_ABSTAIN\n"
+            + "\n".join(",".join(map(str, row)) for row in cm),
+            encoding="utf-8",
+        )
+
+        if valid_m["f1"] > best_f1:
+            best_f1 = valid_m["f1"]
+            best_state = {k: v.cpu() for k, v in model.state_dict().items()}
+
+    tok_dir = out_dir / "tokenizer"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    tok_dir.mkdir(parents=True, exist_ok=True)
+    if best_state is not None:
+        model.load_state_dict(best_state)
+    torch.save(model.state_dict(), out_dir / "model.pt")
+    tokenizer.save_pretrained(tok_dir)
+
+    train_cfg = {
+        "pretrained": pretrained,
+        "window": window_size,
+        "max_length": max_length,
+        "feat_dim": int(feat_dim),
+        "best_valid_f1": float(best_f1),
+        "label_map": {"FOR": 0, "AGAINST": 1, "ABSTAIN": 2},
+        "numeric_preprocessor": preprocessor,
+        "split_manifest": str(split_path),
+        "train_frac": train_frac,
+        "val_frac": val_frac,
+        "seed": seed,
+    }
+    (out_dir / "config.json").write_text(json.dumps(train_cfg, indent=2), encoding="utf-8")
+
+    train_report.write_text(
+        "# Model training report\n\n"
+        + "\n".join(f"- {ln}" for ln in train_lines)
+        + f"\n\nBest validation macro-F1: **{best_f1:.4f}**\n",
+        encoding="utf-8",
+    )
+    st8 = (base / (cfg.get("reports") or {}).get("stage08_md", "outputs/reports/stage08_behaviour_modelling.md")).resolve()
+    st8.parent.mkdir(parents=True, exist_ok=True)
+    st8.write_text(
+        "\n".join(
+            [
+                "# Stage 8 — Behaviour modelling",
+                "",
+                f"- Model dir: `{out_dir}`",
+                f"- Training report: `{train_report}`",
+                f"- Preprocessing report: `{prep_report}`",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    print(f"[08] saved model to {out_dir}")
+
+
+if __name__ == "__main__":
+    main()

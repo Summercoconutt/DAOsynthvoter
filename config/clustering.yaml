@@ -1,0 +1,2 @@
+corr_threshold_feature_selection: 0.85
+min_votes_per_voter_space: 5
