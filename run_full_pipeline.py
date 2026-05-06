@@ -25,6 +25,7 @@ SCRIPTS = [
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", type=str, default="configs/default.yaml")
+    ap.add_argument("--extra-config", type=str, default="", help="Optional YAML merged over --config (e.g. server raw paths).")
     ap.add_argument("--from-stage", type=int, default=1, help="Start at stage N (1–8).")
     ap.add_argument("--to-stage", type=int, default=8, help="End at stage N (1–8).")
     args = ap.parse_args()
@@ -40,8 +41,11 @@ def main() -> None:
     for i in range(lo, hi + 1):
         script = ROOT / "scripts" / SCRIPTS[i - 1]
         print(f"\n=== Stage {i}: {script.name} ===\n")
+        cmd = [sys.executable, str(script), "--config", args.config]
+        if args.extra_config:
+            cmd.extend(["--extra-config", args.extra_config])
         subprocess.run(
-            [sys.executable, str(script), "--config", args.config],
+            cmd,
             check=True,
             cwd=str(ROOT),
             env=env,

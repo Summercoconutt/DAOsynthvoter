@@ -19,11 +19,13 @@ from dao_governance.settings import load_config, project_root
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", type=str, default="configs/default.yaml")
+    ap.add_argument("--extra-config", type=str, default="", help="Optional YAML merged over --config (e.g. server raw paths).")
     ap.add_argument("--skip-load", action="store_true", help="Skip 01_load_data if votes parquet already exists.")
     args = ap.parse_args()
     base = project_root()
     cfg_path = (base / args.config).resolve() if not Path(args.config).is_absolute() else Path(args.config)
-    cfg = load_config(config_path=cfg_path)
+    extra = (base / args.extra_config).resolve() if args.extra_config else None
+    cfg = load_config(config_path=cfg_path, extra_path=extra)
     paths = cfg.get("paths", {})
     report = (base / cfg.get("reports", {}).get("stage04_md", "outputs/reports/stage04_dao_metrics.md")).resolve()
 
