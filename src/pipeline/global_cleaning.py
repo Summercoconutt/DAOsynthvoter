@@ -25,10 +25,38 @@ class GlobalCleanSummary:
     notes: List[str] = field(default_factory=list)
 
 
+def _standardize_vote_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Map common raw export column names to canonical pipeline names."""
+    out = df.copy()
+    rename_map = {
+        "Space": "space",
+        "Proposal ID": "proposal_id",
+        "Proposal Title": "proposal_title",
+        "Voter": "voter",
+        "Choice": "choice",
+        "Voting Power": "voting_power",
+        "VP Ratio (%)": "vp_ratio_pct",
+        "Is Whale": "is_whale",
+        "Aligned With Majority": "aligned_with_majority",
+        "Vote Timestamp": "vote_timestamp",
+        "Created Time": "created_time",
+        "Vote Label": "vote_label",
+        "Original Choice": "original_choice",
+    }
+    for src, dst in rename_map.items():
+        if src in out.columns and dst not in out.columns:
+            out = out.rename(columns={src: dst})
+    return out
+
+
 def _ensure_choice_norm_like_prepare(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     if "choice_norm" not in out.columns and "choice" in out.columns:
         out["choice_norm"] = out["choice"].astype(str).str.lower().str.strip()
+    if "vote_timestamp" not in out.columns and "created_time" in out.columns:
+        out["vote_timestamp"] = out["created_time"]
+    if "created_time" not in out.columns and "vote_timestamp" in out.columns:
+        out["created_time"] = out["vote_timestamp"]
     return out
 
 
@@ -158,6 +186,7 @@ def run_global_cleaning_stage(cfg: Dict[str, Any], root: Path) -> Path:
         votes = pd.read_parquet(raw_path)
     else:
         votes = pd.read_csv(raw_path, low_memory=False)
+    votes = _standardize_vote_columns(votes)
 
     dedupe = dq.get("dedupe_keys") or ["voter", "space", "proposal_id"]
     valid = dq.get("valid_choice_norm") or ["for", "against", "abstain"]

@@ -9,6 +9,24 @@ import pandas as pd
 from utils import log, safe_gini, safe_hhi
 
 
+def _normalize_for_metrics(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    rename_map = {
+        "Space": "space",
+        "Proposal ID": "proposal_id",
+        "Voter": "voter",
+        "Voting Power": "voting_power",
+        "Created Time": "created_time",
+        "Vote Timestamp": "vote_timestamp",
+    }
+    for src, dst in rename_map.items():
+        if src in out.columns and dst not in out.columns:
+            out = out.rename(columns={src: dst})
+    if "created_time" not in out.columns and "vote_timestamp" in out.columns:
+        out["created_time"] = out["vote_timestamp"]
+    return out
+
+
 def compute_dao_metrics(votes: pd.DataFrame) -> pd.DataFrame:
     # proposal-level helpers
     proposal_stats = (
@@ -98,6 +116,11 @@ def main() -> None:
     args = parser.parse_args()
 
     votes = pd.read_parquet(Path(args.in_path))
+    votes = _normalize_for_metrics(votes)
+    required = ["space", "proposal_id", "voter", "voting_power", "created_time"]
+    missing = [c for c in required if c not in votes.columns]
+    if missing:
+        raise ValueError(f"Missing required columns for metrics: {missing}. Available columns: {list(votes.columns)}")
     dao_metrics, proposal_metrics = compute_dao_metrics(votes)
 
     Path(args.out_dao).parent.mkdir(parents=True, exist_ok=True)
