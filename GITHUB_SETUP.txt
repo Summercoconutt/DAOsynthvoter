@@ -1,0 +1,22 @@
+Push this folder to a new GitHub repository (run inside whole_pipeline/).
+
+1) Create an empty repo on https://github.com/new  
+   - Name it as you like (e.g. dao-governance-whole-pipeline).  
+   - Do NOT add README / .gitignore / licence if GitHub offers them (avoid merge conflicts).
+
+2) Add remote (replace USER and REPO):
+
+   git remote add origin https://github.com/USER/REPO.git
+
+3) Push:
+
+   git push -u origin main
+
+If GitHub asks for login, use a Personal Access Token (Fine-grained or classic) as the password, not your GitHub account password.
+
+SSH alternative:
+
+   git remote add origin git@github.com:USER/REPO.git
+   git push -u origin main
+
+Note: outputs/ and large data files are listed in .gitignore; upload datasets separately if needed.
