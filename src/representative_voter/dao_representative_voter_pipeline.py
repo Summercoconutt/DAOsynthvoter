@@ -47,6 +47,30 @@ def parse_proposal_id_from_file_name(file_name: str) -> str:
     return stem
 
 
+def standardize_vote_columns(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    rename_map = {
+        "Space": "space",
+        "Proposal ID": "proposal_id",
+        "Proposal Title": "proposal_title",
+        "Proposal Body": "proposal_body",
+        "Created Time": "created_time",
+        "Voter": "voter",
+        "Original Choice": "original_choice",
+        "Choice": "choice",
+        "Vote Label": "vote_label",
+        "Voting Power": "voting_power",
+        "VP Ratio (%)": "vp_ratio_pct",
+        "Is Whale": "is_whale",
+        "Aligned With Majority": "aligned_with_majority",
+        "Vote Timestamp": "vote_timestamp",
+    }
+    for src, dst in rename_map.items():
+        if src in out.columns and dst not in out.columns:
+            out = out.rename(columns={src: dst})
+    return out
+
+
 def load_selected_spaces(base_spaces_path: Path, selected_spaces: Optional[Sequence[str]]) -> pd.DataFrame:
     """
     Recursively read proposal parquet files from selected DAO folders and merge.
@@ -77,12 +101,13 @@ def load_selected_spaces(base_spaces_path: Path, selected_spaces: Optional[Seque
         for pf in proposal_files:
             try:
                 df = pd.read_parquet(pf)
+                df = standardize_vote_columns(df)
                 df["space"] = space_name
                 df["proposal_id"] = parse_proposal_id_from_file_name(pf.name)
 
                 # Normalize mixed-type Choice values early to prevent Arrow conversion issues.
-                if "Choice" in df.columns:
-                    df["Choice"] = df["Choice"].apply(
+                if "choice" in df.columns:
+                    df["choice"] = df["choice"].apply(
                         lambda x: str(x) if isinstance(x, (dict, list)) else (np.nan if x in ["", None] else x)
                     )
                 frames.append(df)
@@ -101,11 +126,11 @@ def normalize_choice(row: pd.Series) -> str:
     """
     Normalize vote choice into {"for","against","abstain","unknown"}.
     Priority:
-    1) numeric Choice mapping 1/2/3
-    2) text in Vote Label fallback
+    1) numeric choice mapping 1/2/3
+    2) text in vote_label fallback
     """
-    choice_raw = row.get("Choice", np.nan)
-    vote_label_raw = row.get("Vote Label", np.nan)
+    choice_raw = row.get("choice", row.get("Choice", np.nan))
+    vote_label_raw = row.get("vote_label", row.get("Vote Label", np.nan))
 
     # First try numeric Choice
     cnum = pd.to_numeric(pd.Series([choice_raw]), errors="coerce").iloc[0]
@@ -177,17 +202,17 @@ def compute_majority_choice(df: pd.DataFrame) -> pd.DataFrame:
 
 def compute_whale_flag(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Compute or overwrite is_whale using top 1% Voting Power threshold globally.
+    Compute or overwrite is_whale using top 1% voting_power threshold globally.
     """
-    if "Voting Power" not in df.columns:
-        warn("Missing 'Voting Power'. Cannot compute whale flag; set to False.")
+    if "voting_power" not in df.columns:
+        warn("Missing 'voting_power'. Cannot compute whale flag; set to False.")
         df["is_whale"] = False
         return df
 
-    vp = pd.to_numeric(df["Voting Power"], errors="coerce")
+    vp = pd.to_numeric(df["voting_power"], errors="coerce")
     q99 = vp.quantile(0.99)
     if pd.isna(q99):
-        warn("Voting Power quantile is NaN; whale flag set to False.")
+        warn("voting_power quantile is NaN; whale flag set to False.")
         df["is_whale"] = False
         return df
 
@@ -212,7 +237,7 @@ def compute_choice_entropy(choices: pd.Series) -> float:
     vals = choices[choices.isin(["for", "against", "abstain"])]
     if len(vals) == 0:
         return 0.0
-    p = vals.value_counts(normalize=True).values.astype(float)
+    p = np.asarray(vals.value_counts(normalize=True).values, dtype=float)
     # Safe entropy: -sum(p log p), ignoring zero probs
     entropy = -np.sum(np.where(p > 0, p * np.log(p), 0.0))
     return float(entropy)
@@ -222,7 +247,7 @@ def build_voter_base(df_votes: pd.DataFrame) -> pd.DataFrame:
     """
     Aggregate vote-level data to (space, voter) feature table.
     """
-    required = {"space", "Voter", "proposal_id"}
+    required = {"space", "voter", "proposal_id"}
     missing = required - set(df_votes.columns)
     if missing:
         raise ValueError(f"Essential columns missing for voter base: {missing}")
@@ -235,25 +260,25 @@ def build_voter_base(df_votes: pd.DataFrame) -> pd.DataFrame:
     log(f"Removed exact duplicate rows: {before - len(work):,}")
 
     before = len(work)
-    work = work.dropna(subset=["Voter"])
-    log(f"Dropped rows with missing Voter: {before - len(work):,}")
+    work = work.dropna(subset=["voter"])
+    log(f"Dropped rows with missing voter: {before - len(work):,}")
 
-    if "Voting Power" not in work.columns:
-        warn("Missing Voting Power, creating as NaN.")
-        work["Voting Power"] = np.nan
-    work["Voting Power"] = pd.to_numeric(work["Voting Power"], errors="coerce")
+    if "voting_power" not in work.columns:
+        warn("Missing voting_power, creating as NaN.")
+        work["voting_power"] = np.nan
+    work["voting_power"] = pd.to_numeric(work["voting_power"], errors="coerce")
     before = len(work)
-    work = work.dropna(subset=["Voting Power"])
-    log(f"Dropped rows with invalid Voting Power: {before - len(work):,}")
+    work = work.dropna(subset=["voting_power"])
+    log(f"Dropped rows with invalid voting_power: {before - len(work):,}")
 
     # Ensure timestamps are datetime
-    if "Vote Timestamp" in work.columns:
-        work["Vote Timestamp"] = pd.to_datetime(work["Vote Timestamp"], errors="coerce")
+    if "vote_timestamp" in work.columns:
+        work["vote_timestamp"] = pd.to_datetime(work["vote_timestamp"], errors="coerce")
     else:
-        warn("Missing Vote Timestamp; time features will be mostly NaN.")
-        work["Vote Timestamp"] = pd.NaT
+        warn("Missing vote_timestamp; time features will be mostly NaN.")
+        work["vote_timestamp"] = pd.NaT
 
-    group_keys = ["space", "Voter"]
+    group_keys = ["space", "voter"]
     records = []
 
     for (space, voter), g in work.groupby(group_keys, dropna=False):
@@ -264,7 +289,7 @@ def build_voter_base(df_votes: pd.DataFrame) -> pd.DataFrame:
         against_votes = int(choice_counts.get("against", 0))
         abstain_votes = int(choice_counts.get("abstain", 0))
 
-        ts_sorted = g["Vote Timestamp"].dropna().sort_values()
+        ts_sorted = g["vote_timestamp"].dropna().sort_values()
         first_ts = ts_sorted.iloc[0] if len(ts_sorted) > 0 else pd.NaT
         last_ts = ts_sorted.iloc[-1] if len(ts_sorted) > 0 else pd.NaT
         active_duration = (
@@ -275,10 +300,10 @@ def build_voter_base(df_votes: pd.DataFrame) -> pd.DataFrame:
             "space": space,
             "voter": voter,
             "total_votes": total_votes,
-            "avg_voting_power": float(g["Voting Power"].mean()),
-            "median_voting_power": float(g["Voting Power"].median()),
-            "max_voting_power": float(g["Voting Power"].max()),
-            "voting_power_std": float(g["Voting Power"].std(ddof=0)),
+            "avg_voting_power": float(g["voting_power"].mean()),
+            "median_voting_power": float(g["voting_power"].median()),
+            "max_voting_power": float(g["voting_power"].max()),
+            "voting_power_std": float(g["voting_power"].std(ddof=0)),
             "for_votes": for_votes,
             "against_votes": against_votes,
             "abstain_votes": abstain_votes,
@@ -292,7 +317,7 @@ def build_voter_base(df_votes: pd.DataFrame) -> pd.DataFrame:
             "first_vote_timestamp": first_ts,
             "last_vote_timestamp": last_ts,
             "active_duration_days": active_duration,
-            "avg_days_between_votes": compute_avg_days_between_votes(g["Vote Timestamp"]),
+            "avg_days_between_votes": compute_avg_days_between_votes(g["vote_timestamp"]),
             "choice_entropy": compute_choice_entropy(g["choice_norm"]),
         }
         records.append(rec)
@@ -366,18 +391,18 @@ def ensure_expected_columns(df: pd.DataFrame) -> pd.DataFrame:
     Add missing non-essential columns with safe defaults and warnings.
     """
     expected = [
-        "Proposal Title",
-        "Proposal Body",
-        "Created Time",
-        "Voter",
-        "Original Choice",
-        "Choice",
-        "Vote Label",
-        "Voting Power",
-        "VP Ratio (%)",
-        "Is Whale",
-        "Aligned With Majority",
-        "Vote Timestamp",
+        "proposal_title",
+        "proposal_body",
+        "created_time",
+        "voter",
+        "original_choice",
+        "choice",
+        "vote_label",
+        "voting_power",
+        "vp_ratio_pct",
+        "is_whale",
+        "aligned_with_majority",
+        "vote_timestamp",
         "space",
         "proposal_id",
     ]
@@ -395,8 +420,8 @@ def make_arrow_safe(df: pd.DataFrame) -> pd.DataFrame:
     """
     out = df.copy()
     # Explicitly sanitize known problematic column first.
-    if "Choice" in out.columns:
-        out["Choice"] = out["Choice"].apply(lambda x: np.nan if pd.isna(x) else str(x))
+    if "choice" in out.columns:
+        out["choice"] = out["choice"].apply(lambda x: np.nan if pd.isna(x) else str(x))
 
     # Generic fallback for object columns that contain dict/list/tuple/set.
     for col in out.columns:
@@ -470,8 +495,8 @@ def main() -> None:
     merged = ensure_expected_columns(merged)
 
     # 2) Parse timestamps safely
-    merged["Vote Timestamp"] = pd.to_datetime(merged["Vote Timestamp"], errors="coerce")
-    merged["Created Time"] = pd.to_datetime(merged["Created Time"], errors="coerce")
+    merged["vote_timestamp"] = pd.to_datetime(merged["vote_timestamp"], errors="coerce")
+    merged["created_time"] = pd.to_datetime(merged["created_time"], errors="coerce")
 
     # 3) Normalize choices
     log("Normalizing vote choices...")
