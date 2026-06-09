@@ -32,6 +32,15 @@ def _safe_iqr(x: pd.Series) -> float:
     return iqr if iqr > 1e-8 else 1.0
 
 
+def _vp_cap(vp_cfg: Dict[str, Any]) -> float:
+    """Voting-power clip cap — supports legacy (cap_q999) and pipeline (cap_value) keys."""
+    if "cap_q999" in vp_cfg:
+        return float(vp_cfg["cap_q999"])
+    if "cap_value" in vp_cfg:
+        return float(vp_cfg["cap_value"])
+    raise KeyError("numeric_preprocessor['voting_power'] missing cap_q999 or cap_value")
+
+
 def fit_numeric_preprocessor(df: pd.DataFrame) -> Dict[str, Any]:
     """
     Fit robust preprocessing parameters on training split only.
@@ -58,10 +67,12 @@ def fit_numeric_preprocessor(df: pd.DataFrame) -> Dict[str, Any]:
     share_center = float(share.median()) if share.notna().any() else 0.0
     share_scale = _safe_iqr(share) if share.notna().any() else 1.0
 
+    cap = float(max(vp_cap, 1.0))
     return {
         "voting_power": {
             "median_raw_nonneg": vp_med,
-            "cap_q999": float(max(vp_cap, 1.0)),
+            "cap_q999": cap,
+            "cap_value": cap,
             "log_center": vp_center,
             "log_scale": float(max(vp_scale, 1e-8)),
         },
@@ -83,7 +94,7 @@ def normalise_columns(df: pd.DataFrame, preprocessor: Dict[str, Any]) -> pd.Data
     vp_cfg = preprocessor["voting_power"]
     vp = pd.to_numeric(out.get("voting_power", np.nan), errors="coerce").replace([np.inf, -np.inf], np.nan)
     vp = vp.mask(vp < 0.0, np.nan).fillna(float(vp_cfg["median_raw_nonneg"]))
-    vp = vp.clip(lower=0.0, upper=float(vp_cfg["cap_q999"]))
+    vp = vp.clip(lower=0.0, upper=_vp_cap(vp_cfg))
     vp = (np.log1p(vp) - float(vp_cfg["log_center"])) / float(vp_cfg["log_scale"])
     out["voting_power"] = vp.astype(float)
 
@@ -96,8 +107,15 @@ def normalise_columns(df: pd.DataFrame, preprocessor: Dict[str, Any]) -> pd.Data
 
     out["is_whale"] = _to_bool_series(out.get("is_whale", False))
     out["aligned_with_majority"] = _to_bool_series(out.get("aligned_with_majority", False))
-    out["dao_cluster"] = pd.to_numeric(out.get("dao_cluster", -1), errors="coerce").fillna(-1).astype(int)
-    out["voter_cluster"] = pd.to_numeric(out.get("voter_cluster", -1), errors="coerce").fillna(-1).astype(int)
+
+    ex = preprocessor.get("extra_robust") or {}
+    for col in ("dao_cluster", "voter_cluster"):
+        if col in out.columns and col in ex:
+            s = pd.to_numeric(out[col], errors="coerce").fillna(-1.0)
+            cfg = ex[col]
+            out[col] = ((s - float(cfg["center"])) / float(cfg["scale"])).astype(float)
+        else:
+            out[col] = pd.to_numeric(out.get(col, -1), errors="coerce").fillna(-1).astype(int)
     out["text"] = out.get("text", "").fillna("").astype(str)
     return out
 
@@ -107,7 +125,7 @@ def select_numeric_columns() -> List[str]:
 
 
 def split_by_voter(df: pd.DataFrame, train_frac: float = 0.8, seed: int = 42) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    voters = df["voter"].dropna().unique()
+    voters = list(df["voter"].dropna().unique())
     rng = np.random.default_rng(seed)
     rng.shuffle(voters)
     n_train = int(len(voters) * train_frac)
