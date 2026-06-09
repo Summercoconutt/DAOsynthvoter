@@ -18,6 +18,16 @@ class Window:
     voter_cluster: int
 
 
+def _eval_cluster_id(row: pd.Series, col: str) -> int:
+    eval_col = f"{col}_eval"
+    if eval_col in row.index and pd.notna(row.get(eval_col)):
+        return int(row[eval_col])
+    val = row.get(col, -1)
+    if pd.isna(val):
+        return -1
+    return int(val)
+
+
 def _time_feats(ts: pd.Timestamp) -> List[float]:
     if pd.isna(ts):
         return [0.0, 0.0, 0.0, 0.0]
@@ -76,8 +86,8 @@ def build_windows(
                 feats.append(arr)
 
             target = int(g.loc[cur, "label_id"])
-            dc = int(g.loc[cur, "dao_cluster"]) if pd.notna(g.loc[cur, "dao_cluster"]) else -1
-            vc = int(g.loc[cur, "voter_cluster"]) if pd.notna(g.loc[cur, "voter_cluster"]) else -1
+            dc = _eval_cluster_id(g.loc[cur], "dao_cluster")
+            vc = _eval_cluster_id(g.loc[cur], "voter_cluster")
             out.append(
                 Window(
                     window_texts=texts,

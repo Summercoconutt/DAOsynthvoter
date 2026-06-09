@@ -60,6 +60,7 @@ reports:
   data_quality_md: "outputs/tables/data_quality_report.md"
   preprocessing_md: "outputs/tables/preprocessing_report.md"
   training_md: "outputs/tables/training_report.md"
+  stage09_md: "outputs/reports/stage09_behaviour_evaluation.md"
 
 data_quality:
   dedupe_keys:
@@ -101,10 +102,11 @@ behaviour_model:
   max_train_windows: 0
   max_valid_windows: 0
   max_test_windows: 0
+  eval_batch_size: 32
   use_amp: false
   lr_warn_above: 1.0e-3
 
-# scripts/09_run_detection_mode.py — scan uncleaned server exports (read-only)
+# scripts/10_run_detection_mode.py — scan uncleaned server exports (read-only)
 detection:
   external_raw_root: "D:/111111/Data"
   parquet_glob: "**/*.parquet"
