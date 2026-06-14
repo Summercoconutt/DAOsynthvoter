@@ -1,0 +1,21 @@
+# Smoke config for 08b (uses test_pipeline demo data).
+#   python scripts/08b_run_behaviour_modelling_no_roberta.py --config configs/default.yaml --extra-config configs/smoke_no_roberta.yaml --reuse-behaviour-csv
+
+behaviour_model:
+  window: 2
+  batch_size: 8
+  epochs: 2
+  lr: 1.0e-3
+  max_train_windows: 320
+  max_valid_windows: 96
+
+paths:
+  behaviour_dataset_csv: "../test_pipeline/outputs/behaviour_modelling/behaviour_dataset.csv"
+  master_with_dao_parquet: "../test_pipeline/outputs/processed/demo_master_with_dao.parquet"
+  voter_cluster_assignments_csv: "../test_pipeline/outputs/voter_clustering/voter_cluster_assignments.csv"
+  split_manifest_json: "outputs/processed/split_manifest_no_roberta_smoke.json"
+  logs_dir: "outputs/logs/smoke_no_roberta"
+
+reports:
+  preprocessing_md: "outputs/tables/preprocessing_report_no_roberta_smoke.md"
+  training_md: "outputs/tables/training_report_no_roberta_smoke.md"

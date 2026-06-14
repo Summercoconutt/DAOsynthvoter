@@ -11,7 +11,9 @@ All paths are **relative to this folder** (`whole_pipeline/`). Edit `configs/def
 | `configs/default.yaml` | Merged configuration (paths, cleaning, clustering, modelling). |
 | `config/*.yaml` | Split copies for readability (`paths`, `cleaning`, `clustering`, `modelling`). |
 | `scripts/01_…`–`08_…` | One entrypoint per stage; each writes a short report under `outputs/reports/`. |
-| `scripts/09_run_detection_mode.py` | **Detection mode**: scan raw server data (read-only), verify behaviour inputs, optional smoke train. |
+| `scripts/08b_run_behaviour_modelling_no_roberta.py` | **Numeric-only** behaviour model (no RoBERTa) for comparison — see `docs/SUPERVISOR_NO_ROBERTA_RUNBOOK.md`. |
+| `scripts/09_run_behaviour_evaluation.py` | **Comprehensive evaluation** after stage 08 (test/val splits, calibration, cluster metrics). |
+| `scripts/10_run_detection_mode.py` | **Detection mode**: scan raw server data (read-only), verify behaviour inputs, optional smoke train. |
 | `configs/smoke_behaviour.yaml` | Tiny training budget for GPU smoke test (merged over default). |
 | `configs/example_server_raw.yaml` | Template pointing **absolute** raw parquet under `D:/111111/Data` into cleaning (does not write into Data). |
 | `run_full_pipeline.py` | Runs stages in order (`--from-stage` / `--to-stage`). |
@@ -47,12 +49,31 @@ Use this when **raw votes live on another disk** (e.g. `D:/111111/Data` from the
 3. **Smoke train** (optional): one short epoch, capped windows — verifies numerics + transformers path.
 
 ```text
-python scripts/09_run_detection_mode.py
-python scripts/09_run_detection_mode.py --smoke-train
-python scripts/09_run_detection_mode.py --skip-raw-scan --smoke-train
+python scripts/10_run_detection_mode.py
+python scripts/10_run_detection_mode.py --smoke-train
+python scripts/10_run_detection_mode.py --skip-raw-scan --smoke-train
 ```
 
 Report: `outputs/reports/detection_mode_report.md`.
+
+## Behaviour model evaluation (after stage 08)
+
+Use the **same voter split** as training (`outputs/processed/split_manifest.json`):
+
+```text
+python scripts/09_run_behaviour_evaluation.py --config configs/default.yaml --split test
+python scripts/09_run_behaviour_evaluation.py --config configs/default.yaml --split val
+```
+
+Outputs under `outputs/tables/eval/{test|val}/`:
+
+- `metrics_summary.json`, `metrics_report.md` — macro/weighted F1, balanced accuracy, MCC, kappa, ECE, log loss
+- `per_class_metrics.csv`, `classification_report.csv`
+- `confusion_matrix_counts.csv` + normalized figure
+- `reliability_bins.csv`, `figures/reliability_*.png`
+- `metrics_by_dao_cluster.csv`, `metrics_by_voter_cluster.csv`
+
+Do **not** use legacy `src/behaviour_modelling/evaluate.py` for models trained by stage 08.
 
 **Cleaning server exports without touching `Data/`:** set an absolute `paths.master_votes_parquet` in `configs/example_server_raw.yaml` (copy and edit), then:
 
