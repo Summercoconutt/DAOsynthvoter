@@ -96,6 +96,7 @@ behaviour_model:
   batch_size: 16
   epochs: 4
   lr: 2.0e-5
+  numeric_only_lr: 1.0e-3
   max_grad_norm: 1.0
   train_frac: 0.7
   val_frac: 0.15

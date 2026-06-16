@@ -116,7 +116,10 @@ def normalise_columns(df: pd.DataFrame, preprocessor: Dict[str, Any]) -> pd.Data
             cfg = ex[col]
             out[col] = ((s - float(cfg["center"])) / float(cfg["scale"])).astype(float)
 
-    out["text"] = out.get("text", "").fillna("").astype(str)
+    if "text" in out.columns:
+        out["text"] = out["text"].fillna("").astype(str)
+    else:
+        out["text"] = ""
     return out
 
 

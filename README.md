@@ -11,6 +11,7 @@ All paths are **relative to this folder** (`whole_pipeline/`). Edit `configs/def
 | `configs/default.yaml` | Merged configuration (paths, cleaning, clustering, modelling). |
 | `config/*.yaml` | Split copies for readability (`paths`, `cleaning`, `clustering`, `modelling`). |
 | `scripts/01_…`–`08_…` | One entrypoint per stage; each writes a short report under `outputs/reports/`. |
+| `scripts/08b_run_behaviour_modelling_no_roberta.py` | **Numeric-only** behaviour model (no RoBERTa) for comparison — **`carlo_dev` branch only**; see `docs/SUPERVISOR_NO_ROBERTA_RUNBOOK.md`. |
 | `scripts/09_run_behaviour_evaluation.py` | **Comprehensive evaluation** after stage 08 (test/val splits, calibration, cluster metrics). |
 | `scripts/10_run_detection_mode.py` | **Detection mode**: scan raw server data (read-only), verify behaviour inputs, optional smoke train. |
 | `configs/smoke_behaviour.yaml` | Tiny training budget for GPU smoke test (merged over default). |
