@@ -15,6 +15,8 @@ All paths are **relative to this folder** (`whole_pipeline/`). Edit `configs/def
 | `scripts/09_run_behaviour_evaluation.py` | **Comprehensive evaluation** after stage 08 (test/val splits, calibration, cluster metrics). |
 | `scripts/10_run_detection_mode.py` | **Detection mode**: scan raw server data (read-only), verify behaviour inputs, optional smoke train. |
 | `docs/SUPERVISOR_LEAKAGE_SAFE_GUIDE.md` | **Leakage-safe Stage 8** — detailed supervisor runbook (Chinese, `carlo_dev`). |
+| `docs/Feature_Specification.md` | Full feature catalogue, `feat_dim=8` layout, stage-by-stage taxonomy. |
+| `docs/Leakage_Audit.md` | Leakage issue register, fixes, severity matrix, verification checklist. |
 | `docs/LEAKAGE_SAFE_RUNBOOK.md` | Short English runbook for leakage-safe behaviour modelling. |
 | `configs/smoke_behaviour.yaml` | Tiny training budget for GPU smoke test (merged over default). |
 | `configs/example_server_raw.yaml` | Template pointing **absolute** raw parquet under `D:/111111/Data` into cleaning (does not write into Data). |

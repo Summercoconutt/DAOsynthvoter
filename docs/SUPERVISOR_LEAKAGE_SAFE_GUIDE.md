@@ -210,6 +210,8 @@ python scripts/08b_run_behaviour_modelling_no_roberta.py --config configs/defaul
 
 ## 11. 相关文档
 
+- `docs/Feature_Specification.md` — 全流水线特征目录与 Stage 8 输入规范（`feat_dim=8`）
+- `docs/Leakage_Audit.md` — 泄漏问题登记表、修复状态、严重性排序与验证清单
 - `docs/LEAKAGE_SAFE_RUNBOOK.md` — 英文简明运行说明
 - `docs/SUPERVISOR_NO_ROBERTA_RUNBOOK.md` — 08b 无 RoBERTa 基线
 - `SERVER_CHECKLIST.txt` — 服务器检查清单（简版）
