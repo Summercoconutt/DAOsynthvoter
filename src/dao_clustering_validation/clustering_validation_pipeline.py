@@ -53,7 +53,7 @@ CLUSTER_RESULTS_DIR = Path(__file__).resolve().parents[2] / "outputs" / "cluster
 
 ID_COLUMN = "space"
 
-# Numeric features used for clustering diagnostics (edit freely)
+# Numeric features used for EXPLORATORY clustering diagnostics (label-heavy z_rep — not for behaviour model).
 FEATURE_COLUMNS: List[str] = [
     "log_n_unique_voters",
     "mean_robust_participation_vp",
@@ -67,6 +67,17 @@ FEATURE_COLUMNS: List[str] = [
     "z_rep_pct_abstain_votes",
     "z_rep_choice_entropy",
     "z_rep_pct_aligned_with_majority",
+]
+
+# Structural-only features (mirrors dao_governance.features.causal_clusters.DAO_CLUSTER_FEATURES).
+PREDICTIVE_DAO_CLUSTER_FEATURES: List[str] = [
+    "log_n_unique_voters",
+    "mean_robust_participation_vp",
+    "std_robust_participation_vp",
+    "gini_voting_power",
+    "whale_ratio_top1pct",
+    "proposal_frequency_per_30d",
+    "repeat_voter_rate",
 ]
 
 # Columns to apply log1p (must be non-negative after shift if needed)

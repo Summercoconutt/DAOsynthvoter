@@ -44,6 +44,7 @@ paths:
   model_artifacts_dir: "outputs/models/behaviour_agent2"
   eval_output_dir: "outputs/tables/eval"
   split_manifest_json: "outputs/processed/split_manifest.json"
+  predictive_cluster_artifacts_dir: "outputs/models/predictive_clusters"
   figures_dir: "outputs/figures"
   tables_dir: "outputs/tables"
   logs_dir: "outputs/logs"
@@ -90,6 +91,11 @@ voter_clustering:
   env_min_rows_mode_a: ""
 
 behaviour_model:
+  use_dao_clusters: true
+  use_voter_clusters: true
+  group_windows_by:
+    - voter
+    - space
   pretrained: "distilroberta-base"
   window: 5
   max_length: 128

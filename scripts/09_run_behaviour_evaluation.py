@@ -70,6 +70,8 @@ def main() -> None:
         "window": cfg_train["window"],
         "max_length": cfg_train["max_length"],
     }
+    if cfg_train.get("enriched_behaviour_csv"):
+        cfg_model["enriched_behaviour_csv"] = cfg_train["enriched_behaviour_csv"]
 
     summaries = []
     for split_label in args.split:

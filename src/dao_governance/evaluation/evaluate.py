@@ -24,10 +24,25 @@ from dao_governance.evaluation.metrics import (
     reliability_bin_table,
     write_metrics_markdown,
 )
+from dao_governance.features.behaviour_pipeline import load_behaviour_votes
 from dao_governance.modelling.dataset import WindowDataset, collate_fn
 from dao_governance.modelling.model import TimeSeriesClassifier
 from dao_governance.modelling.preprocess import filter_df_to_voters, load_dataset, normalise_columns, select_numeric_columns
 from dao_governance.modelling.windows import build_windows
+
+
+def _load_eval_dataframe(dataset_csv: Path, cfg_train: Dict[str, Any]) -> pd.DataFrame:
+    """Prefer train-only enriched CSV (with cluster IDs) written by stage 08."""
+    eval_csv = cfg_train.get("enriched_behaviour_csv")
+    csv_path = Path(eval_csv) if eval_csv and Path(eval_csv).exists() else Path(dataset_csv)
+    if csv_path.resolve() == Path(dataset_csv).resolve():
+        if "dao_cluster" not in pd.read_csv(csv_path, nrows=1).columns:
+            raw_df = load_behaviour_votes(csv_path)
+        else:
+            raw_df = load_dataset(csv_path)
+    else:
+        raw_df = load_dataset(csv_path)
+    return attach_eval_cluster_columns(raw_df)
 
 
 def _run_inference(
@@ -49,7 +64,7 @@ def _run_inference(
     model.load_state_dict(state, strict=True)
     model = model.to(device)
 
-    raw_df = attach_eval_cluster_columns(load_dataset(Path(dataset_csv)))
+    raw_df = _load_eval_dataframe(Path(dataset_csv), cfg_train)
     if voter_ids is not None:
         raw_df = filter_df_to_voters(raw_df, voter_ids)
     if raw_df.empty:

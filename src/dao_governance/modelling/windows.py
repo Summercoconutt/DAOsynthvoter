@@ -1,11 +1,16 @@
-"""Sliding windows for behaviour modelling."""
+"""Sliding windows for behaviour modelling (leakage-safe)."""
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List
+from typing import List, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
+
+# Label-derived columns: allowed in history steps, zeroed at prediction step.
+LABEL_DERIVED_AT_PREDICT_TIME = frozenset({"aligned_with_majority"})
+
+WINDOW_GROUP_COLS: Tuple[str, ...] = ("voter", "space")
 
 
 @dataclass
@@ -39,18 +44,55 @@ def _time_feats(ts: pd.Timestamp) -> List[float]:
     ]
 
 
+def _eval_cluster_id(row: pd.Series, col: str) -> int:
+    val = row.get(col, -1)
+    if pd.isna(val):
+        return -1
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return -1
+
+
+def _row_numeric_vec(
+    row: pd.Series,
+    numeric_cols: Sequence[str],
+    *,
+    is_current_step: bool,
+) -> List[float]:
+    vec: List[float] = []
+    for c in numeric_cols:
+        if is_current_step and c in LABEL_DERIVED_AT_PREDICT_TIME:
+            vec.append(0.0)
+            continue
+        val = row.get(c, 0.0)
+        if isinstance(val, (bool, np.bool_)):
+            vec.append(float(val))
+        else:
+            try:
+                vec.append(float(val))
+            except (TypeError, ValueError):
+                vec.append(0.0)
+    vec.extend(_time_feats(pd.to_datetime(row["vote_ts"], utc=True, errors="coerce")))
+    return vec
+
+
 def build_windows(
     df: pd.DataFrame,
     window_size: int,
     numeric_cols: List[str],
+    *,
+    group_cols: Sequence[str] = WINDOW_GROUP_COLS,
 ) -> List[Window]:
     df = df[df["label_id"].isin([0, 1, 2])].copy()
     out: List[Window] = []
 
-    for voter_id, g in df.groupby("voter"):
+    for group_key, g in df.groupby(list(group_cols)):
         g = g.sort_values("vote_ts").reset_index(drop=True)
         if len(g) < window_size:
             continue
+
+        voter_id = str(group_key[0]) if isinstance(group_key, tuple) else str(group_key)
 
         for t in range(window_size - 1, len(g)):
             hist = list(range(t - window_size + 1, t))
@@ -61,22 +103,13 @@ def build_windows(
             feats: List[np.ndarray] = []
             for idx in indices:
                 row = g.loc[idx]
-                if idx == cur:
+                is_cur = idx == cur
+                if is_cur:
                     texts.append("[PREDICT] " + str(row["text"]))
                 else:
                     texts.append(f"[LABEL_{int(row['label_id'])}] " + str(row["text"]))
 
-                vec = []
-                for c in numeric_cols:
-                    val = row.get(c, 0.0)
-                    if isinstance(val, (bool, np.bool_)):
-                        vec.append(float(val))
-                    else:
-                        try:
-                            vec.append(float(val))
-                        except Exception:
-                            vec.append(0.0)
-                vec.extend(_time_feats(pd.to_datetime(row["vote_ts"], utc=True, errors="coerce")))
+                vec = _row_numeric_vec(row, numeric_cols, is_current_step=is_cur)
                 arr = np.asarray(vec, dtype=np.float32)
                 if not np.isfinite(arr).all():
                     raise ValueError(
@@ -93,7 +126,7 @@ def build_windows(
                     window_texts=texts,
                     window_features=feats,
                     target_label=target,
-                    voter_id=str(voter_id),
+                    voter_id=voter_id,
                     dao_cluster=dc,
                     voter_cluster=vc,
                 )

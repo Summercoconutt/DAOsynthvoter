@@ -10,19 +10,23 @@ import numpy as np
 import pandas as pd
 
 from dao_governance.modelling.preprocess import normalise_columns, select_numeric_columns
-from dao_governance.modelling.windows import _eval_cluster_id, _time_feats
+from dao_governance.modelling.windows import (
+    WINDOW_GROUP_COLS,
+    _eval_cluster_id,
+    _row_numeric_vec,
+    _time_feats,
+)
 
 
 READ_CSV_OPTS = "header=true, ignore_errors=true, strict_mode=false, quote='\"'"
 
 SLIM_COLUMNS = [
     "voter",
+    "space",
     "vote_ts",
     "label_id",
     "voting_power",
-    "vp_share",
     "is_whale",
-    "aligned_with_majority",
     "dao_cluster",
     "voter_cluster",
 ]
@@ -32,17 +36,22 @@ def _register_voters(con: duckdb.DuckDBPyConnection, voters: List[str], table_na
     con.register(table_name, pd.DataFrame({"voter": voters}))
 
 
-def _count_windows(con: duckdb.DuckDBPyConnection, csv_path: Path, voters_table: str, window_size: int) -> int:
+def _count_windows(
+    con: duckdb.DuckDBPyConnection,
+    csv_path: Path,
+    voters_table: str,
+    window_size: int,
+) -> int:
     q = f"""
     SELECT COALESCE(SUM(
         CASE WHEN cnt >= {window_size} THEN cnt - {window_size} + 1 ELSE 0 END
     ), 0)::BIGINT AS n_windows
     FROM (
-        SELECT voter, COUNT(*) AS cnt
+        SELECT voter, space, COUNT(*) AS cnt
         FROM read_csv(?, {READ_CSV_OPTS})
         WHERE label_id IN (0, 1, 2)
           AND voter IN (SELECT voter FROM {voters_table})
-        GROUP BY voter
+        GROUP BY voter, space
     )
     """
     return int(con.execute(q, [str(csv_path)]).fetchone()[0])
@@ -72,17 +81,8 @@ def _windows_from_voter_group(
         step_feats: List[np.ndarray] = []
         for idx in indices:
             row = g.loc[idx]
-            vec: List[float] = []
-            for c in numeric_cols:
-                val = row.get(c, 0.0)
-                if isinstance(val, (bool, np.bool_)):
-                    vec.append(float(val))
-                else:
-                    try:
-                        vec.append(float(val))
-                    except Exception:
-                        vec.append(0.0)
-            vec.extend(_time_feats(pd.to_datetime(row["vote_ts"], utc=True, errors="coerce")))
+            is_cur = idx == t
+            vec = _row_numeric_vec(row, numeric_cols, is_current_step=is_cur)
             arr = np.asarray(vec, dtype=np.float32)
             if not np.isfinite(arr).all():
                 raise ValueError(f"Non-finite feature vector for voter={row['voter']}")
@@ -144,12 +144,12 @@ def materialize_split_cache(
         FROM read_csv(?, {READ_CSV_OPTS})
         WHERE label_id IN (0, 1, 2)
           AND voter IN (SELECT voter FROM {voters_table})
-        ORDER BY voter, vote_ts
+        ORDER BY voter, space, vote_ts
         """,
         [str(csv_path)],
     )
 
-    def _flush_voter(voter_id: str, parts: List[pd.DataFrame]) -> None:
+    def _flush_group(parts: List[pd.DataFrame]) -> None:
         nonlocal write_idx
         if not parts:
             return
@@ -173,17 +173,27 @@ def materialize_split_cache(
             chunk = pd.concat([carry_over, chunk], ignore_index=True)
             carry_over = pd.DataFrame(columns=SLIM_COLUMNS)
 
-        voters_in_chunk = chunk["voter"].astype(str).unique().tolist()
-        for voter_id in voters_in_chunk[:-1]:
-            g = chunk[chunk["voter"].astype(str) == voter_id]
-            _flush_voter(voter_id, [g])
+        chunk["voter"] = chunk["voter"].astype(str)
+        chunk["space"] = chunk["space"].astype(str)
+        group_keys = list(WINDOW_GROUP_COLS)
+        boundaries: List[Tuple[str, str]] = []
+        prev = None
+        for _, row in chunk.iterrows():
+            key = (row["voter"], row["space"])
+            if prev is not None and key != prev:
+                boundaries.append(prev)
+            prev = key
+        boundaries.append(prev)
 
-        last_voter = voters_in_chunk[-1]
-        carry_over = chunk[chunk["voter"].astype(str) == last_voter].copy()
+        for i, key in enumerate(boundaries[:-1]):
+            mask = (chunk["voter"] == key[0]) & (chunk["space"] == key[1])
+            _flush_group([chunk.loc[mask]])
+
+        last_key = boundaries[-1]
+        carry_over = chunk[(chunk["voter"] == last_key[0]) & (chunk["space"] == last_key[1])].copy()
 
     if not carry_over.empty:
-        last_voter = str(carry_over["voter"].iloc[0])
-        _flush_voter(last_voter, [carry_over])
+        _flush_group([carry_over])
 
     if write_idx != n_windows:
         print(f"[cache] WARNING: expected {n_windows} windows, wrote {write_idx}")

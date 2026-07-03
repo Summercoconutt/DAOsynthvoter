@@ -16,11 +16,11 @@ Typical workflow (server raw on D:\\111111\\Data, cleaning only locally):
 
 3. Dry-run checks:
 
-     python scripts/09_run_detection_mode.py
+     python scripts/10_run_detection_mode.py
 
 4. Confirm smoke train completes:
 
-     python scripts/09_run_detection_mode.py --smoke-train
+     python scripts/10_run_detection_mode.py --smoke-train
 """
 
 from __future__ import annotations

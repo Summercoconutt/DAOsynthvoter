@@ -2,6 +2,8 @@
 """
 8) Build behaviour dataset (optional), train voter-choice model with safeguards.
 
+Leakage-safe flow: split -> train-only structural clusters -> causal windows.
+
   cd whole_pipeline
   set PYTHONPATH=src
   python scripts/08_run_behaviour_modelling.py --config configs/default.yaml
@@ -27,14 +29,16 @@ from transformers import AutoTokenizer, get_linear_schedule_with_warmup
 from tqdm import tqdm
 
 from dao_governance.features.behaviour_dataset import build_behaviour_dataset
+from dao_governance.features.behaviour_pipeline import (
+    load_behaviour_votes,
+    prepare_behaviour_splits,
+    write_enriched_behaviour_csv,
+)
 from dao_governance.modelling.dataset import WindowDataset, collate_fn
 from dao_governance.modelling.metrics import macro_prf
 from dao_governance.modelling.model import TimeSeriesClassifier
 from dao_governance.modelling.preprocess import (
     assert_finite_feature_columns,
-    fit_numeric_preprocessor,
-    load_dataset,
-    normalise_columns,
     save_split_manifest,
     select_numeric_columns,
     split_by_voter_three_way,
@@ -48,6 +52,18 @@ def compute_class_weights(y: np.ndarray, num_classes: int = 3) -> torch.Tensor:
     n = counts.sum()
     w = n / (num_classes * np.maximum(counts, 1.0))
     return torch.tensor(w, dtype=torch.float32)
+
+
+def _resolve_master_parquet(base: Path, paths: dict) -> Path:
+    cleaned = (base / paths.get("cleaned_master_parquet", "data/processed/votes_cleaned.parquet")).resolve()
+    if cleaned.exists():
+        return cleaned
+    merged = (base / paths.get("master_with_dao_parquet", "data/processed/master_votes_with_dao_cluster.parquet")).resolve()
+    if merged.exists():
+        return merged
+    raise FileNotFoundError(
+        f"Need cleaned or master votes parquet. Tried: {cleaned}, {merged}. Run stages 02–03 / 07."
+    )
 
 
 def main() -> None:
@@ -73,33 +89,40 @@ def main() -> None:
     paths = cfg.get("paths", {})
     bm = cfg.get("behaviour_model", {})
     dq = cfg.get("data_quality", {})
+    vc = cfg.get("voter_clustering", {})
 
-    behaviour_csv = (base / paths.get("behaviour_dataset_csv", "outputs/behaviour_modelling/behaviour_dataset.csv")).resolve()
-    merged = (base / paths.get("master_with_dao_parquet", "data/processed/master_votes_with_dao_cluster.parquet")).resolve()
-    assign = (base / paths.get("voter_cluster_assignments_csv", "outputs/voter_clustering/voter_cluster_assignments.csv")).resolve()
-    out_dir = (base / paths.get("model_artifacts_dir", "outputs/behaviour_modelling/agent2_artifacts")).resolve()
+    behaviour_csv = (base / paths.get("behaviour_dataset_csv", "outputs/tables/behaviour_dataset.csv")).resolve()
+    enriched_csv = behaviour_csv.with_name("behaviour_dataset_with_clusters.csv")
+    master_parquet = _resolve_master_parquet(base, paths)
+    dao_feat = (base / paths.get("dao_feature_table_csv", "data/processed/dao_feature_table.csv")).resolve()
+    if not dao_feat.exists():
+        dao_feat = (base / paths.get("dao_feature_table_parquet", "data/processed/dao_feature_table.parquet")).resolve()
+
+    cluster_dir = (base / paths.get("predictive_cluster_artifacts_dir", "outputs/models/predictive_clusters")).resolve()
+    out_dir = (base / paths.get("model_artifacts_dir", "outputs/models/behaviour_agent2")).resolve()
     logs_dir = (base / paths.get("logs_dir", "outputs/logs")).resolve()
     split_path = (base / paths.get("split_manifest_json", "outputs/processed/split_manifest.json")).resolve()
     prep_report = (base / (cfg.get("reports") or {}).get("preprocessing_md", "outputs/tables/preprocessing_report.md")).resolve()
     train_report = (base / (cfg.get("reports") or {}).get("training_md", "outputs/tables/training_report.md")).resolve()
 
-    for d in (behaviour_csv.parent, out_dir, logs_dir, split_path.parent, prep_report.parent):
+    use_dao = bool(bm.get("use_dao_clusters", True))
+    use_voter = bool(bm.get("use_voter_clusters", True))
+    min_votes = int(vc.get("min_votes_per_voter_space", 5))
+
+    for d in (behaviour_csv.parent, out_dir, logs_dir, split_path.parent, prep_report.parent, cluster_dir):
         d.mkdir(parents=True, exist_ok=True)
 
     if not args.reuse_behaviour_csv or not behaviour_csv.exists():
-        if not merged.exists() or not assign.exists():
-            raise FileNotFoundError(
-                f"Need {merged} and {assign}. Run scripts 02–03 first (or test_pipeline / run_demo)."
-            )
-        df_b, rep_b = build_behaviour_dataset(merged, assign, output_csv=behaviour_csv)
+        _, rep_b = build_behaviour_dataset(master_parquet, output_csv=behaviour_csv)
         br_path = prep_report.parent / "behaviour_dataset_quality.md"
         br_path.write_text(rep_b.to_markdown("Behaviour dataset (build)"), encoding="utf-8")
     else:
         print("[08] Reusing existing behaviour CSV:", behaviour_csv)
 
-    raw_df = load_dataset(behaviour_csv)
+    raw_df = load_behaviour_votes(behaviour_csv)
     train_frac = float(bm.get("train_frac", 0.7))
     val_frac = float(bm.get("val_frac", 0.15))
+
     train_raw, val_raw, test_raw = split_by_voter_three_way(
         raw_df, train_frac=train_frac, val_frac=val_frac, seed=seed
     )
@@ -114,21 +137,32 @@ def main() -> None:
     )
     print(f"[08] Split manifest: {split_path}")
 
-    upper_q = float(dq.get("upper_quantile_cap", 0.999))
-    abs_cap = float(dq.get("absolute_cap", 1e18))
-    preprocessor = fit_numeric_preprocessor(train_raw, upper_quantile_cap=upper_q, absolute_cap=abs_cap)
+    train_df, val_df, test_df, preprocessor, cluster_bundle, tr_a, va_a, te_a = prepare_behaviour_splits(
+        raw_df,
+        dao_feature_table_path=dao_feat,
+        train_frac=train_frac,
+        val_frac=val_frac,
+        seed=seed,
+        upper_quantile_cap=float(dq.get("upper_quantile_cap", 0.999)),
+        absolute_cap=float(dq.get("absolute_cap", 1e18)),
+        use_dao_clusters=use_dao,
+        use_voter_clusters=use_voter,
+        min_votes_per_pair=min_votes,
+        cluster_artifacts_dir=cluster_dir,
+    )
+    write_enriched_behaviour_csv(tr_a, va_a, te_a, enriched_csv)
+    print(f"[08] Enriched behaviour CSV (clusters): {enriched_csv}")
+
     prep_report.write_text(
         "# Preprocessing report\n\n"
-        f"- Voting power cap (quantile {upper_q}): **{preprocessor['voting_power']['cap_value']}**\n"
+        f"- Leakage-safe: **train-only structural clusters**, `(voter, space)` windows\n"
+        f"- Voting power cap (quantile {dq.get('upper_quantile_cap', 0.999)}): **{preprocessor['voting_power']['cap_value']}**\n"
         f"- Transform: **{preprocessor['voting_power'].get('transform', 'clip_then_log1p_robust')}**\n"
-        f"- Notes: {preprocessor.get('meta', {}).get('notes', [])}\n"
-        f"- Near–zero variance columns (informational): {preprocessor.get('meta', {}).get('zero_variance_columns', [])}\n",
+        f"- Model numeric columns: **{select_numeric_columns()}**\n"
+        f"- Cluster meta: **{cluster_bundle.meta}**\n"
+        f"- Notes: {preprocessor.get('meta', {}).get('notes', [])}\n",
         encoding="utf-8",
     )
-
-    train_df = normalise_columns(train_raw, preprocessor=preprocessor)
-    val_df = normalise_columns(val_raw, preprocessor=preprocessor)
-    test_df = normalise_columns(test_raw, preprocessor=preprocessor)
 
     num_cols = select_numeric_columns()
     for name, dfx in [("train", train_df), ("val", val_df), ("test", test_df)]:
@@ -260,6 +294,12 @@ def main() -> None:
         "train_frac": train_frac,
         "val_frac": val_frac,
         "seed": seed,
+        "leakage_safe": True,
+        "numeric_columns": select_numeric_columns(),
+        "cluster_artifacts_dir": str(cluster_dir),
+        "use_dao_clusters": use_dao,
+        "use_voter_clusters": use_voter,
+        "enriched_behaviour_csv": str(enriched_csv),
     }
     (out_dir / "config.json").write_text(json.dumps(train_cfg, indent=2), encoding="utf-8")
 
@@ -274,9 +314,11 @@ def main() -> None:
     st8.write_text(
         "\n".join(
             [
-                "# Stage 8 — Behaviour modelling",
+                "# Stage 8 — Behaviour modelling (leakage-safe)",
                 "",
                 f"- Model dir: `{out_dir}`",
+                f"- Cluster artifacts: `{cluster_dir}`",
+                f"- Enriched CSV (cache): `{enriched_csv}`",
                 f"- Training report: `{train_report}`",
                 f"- Preprocessing report: `{prep_report}`",
                 "",

@@ -14,6 +14,8 @@ All paths are **relative to this folder** (`whole_pipeline/`). Edit `configs/def
 | `scripts/08b_run_behaviour_modelling_no_roberta.py` | **Numeric-only** behaviour model (no RoBERTa) for comparison — **`carlo_dev` branch only**; see `docs/SUPERVISOR_NO_ROBERTA_RUNBOOK.md`. |
 | `scripts/09_run_behaviour_evaluation.py` | **Comprehensive evaluation** after stage 08 (test/val splits, calibration, cluster metrics). |
 | `scripts/10_run_detection_mode.py` | **Detection mode**: scan raw server data (read-only), verify behaviour inputs, optional smoke train. |
+| `docs/SUPERVISOR_LEAKAGE_SAFE_GUIDE.md` | **Leakage-safe Stage 8** — detailed supervisor runbook (Chinese, `carlo_dev`). |
+| `docs/LEAKAGE_SAFE_RUNBOOK.md` | Short English runbook for leakage-safe behaviour modelling. |
 | `configs/smoke_behaviour.yaml` | Tiny training budget for GPU smoke test (merged over default). |
 | `configs/example_server_raw.yaml` | Template pointing **absolute** raw parquet under `D:/111111/Data` into cleaning (does not write into Data). |
 | `run_full_pipeline.py` | Runs stages in order (`--from-stage` / `--to-stage`). |
@@ -45,7 +47,7 @@ Linux/macOS: `export PYTHONPATH=src`.
 Use this when **raw votes live on another disk** (e.g. `D:/111111/Data` from the lab server) and you only want **local cleaning + confirmation that stage 08 runs**.
 
 1. **Read-only scan** of uncleaned parquet under `detection.external_raw_root` (VP negatives / scale — no writes).
-2. **Prerequisite check**: `master_with_dao_parquet` + `voter_cluster_assignments_csv` exist and have required columns.
+2. **Prerequisite check**: `cleaned_master_parquet` + `dao_feature_table_csv` exist (Stage 7 voter clusters optional, EDA only).
 3. **Smoke train** (optional): one short epoch, capped windows — verifies numerics + transformers path.
 
 ```text

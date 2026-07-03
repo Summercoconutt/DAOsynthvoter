@@ -36,6 +36,11 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from dao_governance.features.behaviour_dataset import build_behaviour_dataset
+from dao_governance.features.behaviour_pipeline import (
+    load_behaviour_votes,
+    prepare_behaviour_splits,
+    write_enriched_behaviour_csv,
+)
 from dao_governance.modelling.dataset import (
     MemmapNumericWindowDataset,
     NumericWindowDataset,
@@ -45,10 +50,6 @@ from dao_governance.modelling.metrics import macro_prf
 from dao_governance.modelling.model import NumericOnlyTimeSeriesClassifier
 from dao_governance.modelling.preprocess import (
     assert_finite_feature_columns,
-    fit_numeric_preprocessor,
-    load_dataset,
-    load_split_manifest,
-    normalise_columns,
     save_split_manifest,
     select_numeric_columns,
     split_by_voter_three_way,
@@ -204,6 +205,16 @@ def _prepare_from_cache(
     return train_ds, valid_ds, meta
 
 
+def _resolve_master_parquet(base: Path, paths: dict) -> Path:
+    cleaned = (base / paths.get("cleaned_master_parquet", "data/processed/votes_cleaned.parquet")).resolve()
+    if cleaned.exists():
+        return cleaned
+    merged = (base / paths.get("master_with_dao_parquet", "data/processed/master_votes_with_dao_cluster.parquet")).resolve()
+    if merged.exists():
+        return merged
+    raise FileNotFoundError(f"Need cleaned or master votes parquet under {base}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", type=str, default="configs/default.yaml")
@@ -264,8 +275,12 @@ def main() -> None:
     reports = cfg.get("reports") or {}
 
     behaviour_csv = (base / paths.get("behaviour_dataset_csv", "outputs/tables/behaviour_dataset.csv")).resolve()
-    merged = (base / paths.get("master_with_dao_parquet", "data/processed/master_votes_with_dao_cluster.parquet")).resolve()
-    assign = (base / paths.get("voter_cluster_assignments_csv", "outputs/voter_clustering/voter_cluster_assignments.csv")).resolve()
+    enriched_csv = behaviour_csv.with_name("behaviour_dataset_with_clusters.csv")
+    master_parquet = _resolve_master_parquet(base, paths)
+    dao_feat = (base / paths.get("dao_feature_table_csv", "data/processed/dao_feature_table.csv")).resolve()
+    if not dao_feat.exists():
+        dao_feat = (base / paths.get("dao_feature_table_parquet", "data/processed/dao_feature_table.parquet")).resolve()
+    cluster_dir = (base / paths.get("predictive_cluster_artifacts_dir", "outputs/models/predictive_clusters")).resolve()
     out_dir = (base / "outputs/behaviour_modelling/agent2_artifacts_no_roberta").resolve()
     logs_dir = (base / paths.get("logs_dir", "outputs/logs")).resolve()
     split_path = (base / paths.get("split_manifest_json", "outputs/processed/split_manifest.json")).resolve()
@@ -276,21 +291,21 @@ def main() -> None:
     if train_report.name == "training_report.md":
         train_report = (base / "outputs/tables/training_report_no_roberta.md").resolve()
 
-    for d in (behaviour_csv.parent, out_dir, logs_dir, split_path.parent, prep_report.parent, train_report.parent):
+    use_dao = bool(bm.get("use_dao_clusters", True))
+    use_voter = bool(bm.get("use_voter_clusters", True))
+    min_votes = int(cfg.get("voter_clustering", {}).get("min_votes_per_voter_space", 5))
+
+    for d in (behaviour_csv.parent, out_dir, logs_dir, split_path.parent, prep_report.parent, train_report.parent, cluster_dir):
         d.mkdir(parents=True, exist_ok=True)
 
     if not args.reuse_behaviour_csv or not behaviour_csv.exists():
-        if not merged.exists() or not assign.exists():
-            raise FileNotFoundError(
-                f"Need {merged} and {assign}. Run scripts 02–07 first, or pass --reuse-behaviour-csv "
-                f"with an existing behaviour CSV at {behaviour_csv}."
-            )
-        _, rep_b = build_behaviour_dataset(merged, assign, output_csv=behaviour_csv)
+        _, rep_b = build_behaviour_dataset(master_parquet, output_csv=behaviour_csv)
         br_path = prep_report.parent / "behaviour_dataset_quality_no_roberta.md"
         br_path.write_text(rep_b.to_markdown("Behaviour dataset (build)"), encoding="utf-8")
     else:
         print("[08b] Reusing existing behaviour CSV:", behaviour_csv)
 
+    raw_df = load_behaviour_votes(behaviour_csv)
     train_frac = float(bm.get("train_frac", 0.7))
     val_frac = float(bm.get("val_frac", 0.15))
     window_size = int(bm.get("window", 5))
@@ -298,15 +313,11 @@ def main() -> None:
     abs_cap = float(dq.get("absolute_cap", 1e18))
     cache_dir = (base / args.window_cache_dir).resolve()
 
-    csv_bytes = behaviour_csv.stat().st_size if behaviour_csv.exists() else 0
+    cache_csv = enriched_csv if enriched_csv.exists() else behaviour_csv
+    csv_bytes = cache_csv.stat().st_size if cache_csv.exists() else 0
     use_cache = args.reuse_split_manifest or csv_bytes > 1_000_000_000
-    if use_cache and not split_path.exists():
-        raise FileNotFoundError(
-            f"Large-dataset mode requires existing split manifest: {split_path}. "
-            "Run scripts/08_run_behaviour_modelling.py first or provide the same manifest."
-        )
 
-    preprocessor: Dict[str, Any]
+    preprocessor: Dict[str, Any] | None = None
     prep_source = args.reuse_preprocessor_from.strip()
     if prep_source:
         pre_path = Path(prep_source)
@@ -323,26 +334,54 @@ def main() -> None:
         else:
             pre_path = Path("")
 
-    if use_cache and pre_path.exists():
-        preprocessor = _load_preprocessor_from_config(pre_path)
-        print(f"[08b] Loaded preprocessor from {pre_path}")
+    if use_cache:
+        if not split_path.exists():
+            tr, va, te = split_by_voter_three_way(raw_df, train_frac=train_frac, val_frac=val_frac, seed=seed)
+            save_split_manifest(
+                split_path,
+                train_voters=tr["voter"].unique(),
+                val_voters=va["voter"].unique(),
+                test_voters=te["voter"].unique(),
+                seed=seed,
+                train_frac=train_frac,
+                val_frac=val_frac,
+            )
+            print(f"[08b] Created split manifest: {split_path}")
+
+        need_prepare = not enriched_csv.exists() or not pre_path.exists()
+        if need_prepare:
+            print("[08b] Building enriched CSV + preprocessor (train-only clusters)...")
+            _, _, _, preprocessor, _, tr_a, va_a, te_a = prepare_behaviour_splits(
+                raw_df,
+                dao_feature_table_path=dao_feat,
+                train_frac=train_frac,
+                val_frac=val_frac,
+                seed=seed,
+                upper_quantile_cap=upper_q,
+                absolute_cap=abs_cap,
+                use_dao_clusters=use_dao,
+                use_voter_clusters=use_voter,
+                min_votes_per_pair=min_votes,
+                cluster_artifacts_dir=cluster_dir,
+            )
+            write_enriched_behaviour_csv(tr_a, va_a, te_a, enriched_csv)
+        elif pre_path.exists():
+            preprocessor = _load_preprocessor_from_config(pre_path)
+            print(f"[08b] Loaded preprocessor from {pre_path}")
+
+        if preprocessor is None:
+            raise RuntimeError("[08b] Preprocessor not available after cache prep.")
+
+        cache_csv = enriched_csv
+        print(f"[08b] Large-dataset mode (CSV {cache_csv.stat().st_size / 1e9:.1f} GB), split manifest: {split_path}")
         prep_report.write_text(
             "# Preprocessing report (No-RoBERTa)\n\n"
-            f"- Source: `{pre_path}` (same as RoBERTa run)\n"
-            f"- Voting power cap: **{preprocessor['voting_power']['cap_value']}**\n"
-            f"- Transform: **{preprocessor['voting_power'].get('transform', 'clip_then_log1p_robust')}**\n",
+            f"- Leakage-safe cache CSV: `{cache_csv}`\n"
+            f"- Model numeric columns: **{select_numeric_columns()}**\n",
             encoding="utf-8",
         )
-    elif use_cache:
-        raise FileNotFoundError(
-            "Large-dataset mode needs numeric_preprocessor from RoBERTa config. "
-            "Pass --reuse-preprocessor-from outputs/models/behaviour_agent2/config.json"
-        )
-
-    if use_cache:
-        print(f"[08b] Large-dataset mode (CSV {csv_bytes / 1e9:.1f} GB), split manifest: {split_path}")
         train_ds, valid_ds, _cache_meta = _prepare_from_cache(
-            behaviour_csv=behaviour_csv,
+            behaviour_csv=cache_csv,
             split_path=split_path,
             cache_dir=cache_dir,
             window_size=window_size,
@@ -353,7 +392,6 @@ def main() -> None:
         train_labels = np.asarray(train_ds.labels)
         valid_labels = np.asarray(valid_ds.labels)
     else:
-        raw_df = load_dataset(behaviour_csv)
         train_raw, val_raw, test_raw = split_by_voter_three_way(
             raw_df, train_frac=train_frac, val_frac=val_frac, seed=seed
         )
@@ -368,19 +406,29 @@ def main() -> None:
         )
         print(f"[08b] Split manifest: {split_path}")
 
-        preprocessor = fit_numeric_preprocessor(train_raw, upper_quantile_cap=upper_q, absolute_cap=abs_cap)
+        train_df, val_df, test_df, preprocessor, cluster_bundle, tr_a, va_a, te_a = prepare_behaviour_splits(
+            raw_df,
+            dao_feature_table_path=dao_feat,
+            train_frac=train_frac,
+            val_frac=val_frac,
+            seed=seed,
+            upper_quantile_cap=upper_q,
+            absolute_cap=abs_cap,
+            use_dao_clusters=use_dao,
+            use_voter_clusters=use_voter,
+            min_votes_per_pair=min_votes,
+            cluster_artifacts_dir=cluster_dir,
+        )
+        write_enriched_behaviour_csv(tr_a, va_a, te_a, enriched_csv)
+
         prep_report.write_text(
             "# Preprocessing report (No-RoBERTa)\n\n"
+            f"- Leakage-safe: **train-only structural clusters**\n"
             f"- Voting power cap (quantile {upper_q}): **{preprocessor['voting_power']['cap_value']}**\n"
-            f"- Transform: **{preprocessor['voting_power'].get('transform', 'clip_then_log1p_robust')}**\n"
-            f"- Notes: {preprocessor.get('meta', {}).get('notes', [])}\n"
-            f"- Near–zero variance columns (informational): {preprocessor.get('meta', {}).get('zero_variance_columns', [])}\n",
+            f"- Model numeric columns: **{select_numeric_columns()}**\n"
+            f"- Cluster meta: **{cluster_bundle.meta}**\n",
             encoding="utf-8",
         )
-
-        train_df = normalise_columns(train_raw, preprocessor=preprocessor)
-        val_df = normalise_columns(val_raw, preprocessor=preprocessor)
-        test_df = normalise_columns(test_raw, preprocessor=preprocessor)
 
         num_cols = select_numeric_columns()
         for name, dfx in [("train", train_df), ("val", val_df), ("test", test_df)]:
@@ -522,6 +570,9 @@ def main() -> None:
         "epochs": epochs,
         "lr": lr,
         "window_cache_dir": str(cache_dir) if use_cache else "",
+        "leakage_safe": True,
+        "numeric_columns": select_numeric_columns(),
+        "cluster_artifacts_dir": str(cluster_dir),
     }
     config_path = out_dir / "config.json"
     config_path.write_text(json.dumps(train_cfg, indent=2), encoding="utf-8")

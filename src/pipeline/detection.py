@@ -96,24 +96,24 @@ def check_behaviour_prerequisites(cfg: Dict[str, Any], root: Path) -> Tuple[bool
     ok = True
 
     merged = resolve_path(cfg, "master_with_dao_parquet", relative_to=root)
+    cleaned = resolve_path(cfg, "cleaned_master_parquet", relative_to=root)
     assign = resolve_path(cfg, "voter_cluster_assignments_csv", relative_to=root)
+    dao_feat = resolve_path(cfg, "dao_feature_table_csv", relative_to=root)
 
-    if not merged.exists():
+    votes_path = cleaned if cleaned.exists() else merged
+    if not votes_path.exists():
         ok = False
-        lines.append(f"MISSING master_with_dao_parquet: `{merged}`")
+        lines.append(f"MISSING votes parquet (need cleaned or master): `{cleaned}` / `{merged}`")
     else:
-        lines.append(f"OK merged votes: `{merged}`")
+        lines.append(f"OK votes for behaviour build: `{votes_path}`")
         try:
-            df = pd.read_parquet(merged)
+            df = pd.read_parquet(votes_path)
             miss = [c for c in VOTES_NEED_MERGE if c not in df.columns]
             if miss:
                 ok = False
                 lines.append(f"  FAIL columns missing: {miss}")
             else:
                 lines.append("  OK core columns for behaviour_dataset.")
-            miss2 = [c for c in MERGED_EXTRA if c not in df.columns]
-            if miss2:
-                lines.append(f"  WARN optional columns absent (may break features): {miss2}")
             n = len(df)
             lines.append(f"  rows={n:,}")
             if n < 500:
@@ -122,26 +122,25 @@ def check_behaviour_prerequisites(cfg: Dict[str, Any], root: Path) -> Tuple[bool
             ok = False
             lines.append(f"  FAIL read parquet: {exc}")
 
-    if not assign.exists():
-        ok = False
-        lines.append(f"MISSING voter_cluster_assignments_csv: `{assign}`")
-    else:
-        lines.append(f"OK voter clusters: `{assign}`")
-        try:
-            a = pd.read_csv(assign)
-            miss = [c for c in ASSIGN_NEED if c not in a.columns]
-            if miss:
-                ok = False
-                lines.append(f"  FAIL assignment columns missing: {miss}")
-        except Exception as exc:
+    if not dao_feat.exists():
+        pq = resolve_path(cfg, "dao_feature_table_parquet", relative_to=root)
+        if pq.exists():
+            lines.append(f"OK DAO feature table (parquet): `{pq}`")
+        else:
             ok = False
-            lines.append(f"  FAIL read CSV: {exc}")
+            lines.append(f"MISSING dao_feature_table for train-only DAO clusters: `{dao_feat}`")
+    else:
+        lines.append(f"OK DAO feature table: `{dao_feat}`")
 
-    cleaned = resolve_path(cfg, "cleaned_master_parquet", relative_to=root)
+    if assign.exists():
+        lines.append(f"INFO Stage 7 exploratory voter clusters (optional): `{assign}`")
+    else:
+        lines.append(f"INFO no Stage 7 exploratory assignments (optional): `{assign}`")
+
     if cleaned.exists():
         lines.append(f"OK cleaned votes exist: `{cleaned}`")
     else:
-        lines.append(f"INFO cleaned_master_parquet not found yet: `{cleaned}` (run stage 03 or detection clean).")
+        lines.append(f"INFO cleaned_master_parquet not found yet: `{cleaned}` (run stage 03).")
 
     return ok, lines
 

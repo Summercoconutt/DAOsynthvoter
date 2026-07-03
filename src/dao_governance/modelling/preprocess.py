@@ -15,6 +15,12 @@ def _safe_iqr(x: pd.Series) -> float:
     return iqr if iqr > 1e-8 else 1.0
 
 
+def _numeric_series(df: pd.DataFrame, col: str, default: float = np.nan) -> pd.Series:
+    if col in df.columns:
+        return pd.to_numeric(df[col], errors="coerce")
+    return pd.Series(default, index=df.index, dtype=float)
+
+
 def fit_numeric_preprocessor(
     df: pd.DataFrame,
     *,
@@ -47,7 +53,7 @@ def fit_numeric_preprocessor(
     vp_center = float(vp_log.median()) if vp_log.notna().any() else 0.0
     vp_scale = _safe_iqr(vp_log) if vp_log.notna().any() else 1.0
 
-    raw_share = pd.to_numeric(df.get("vp_share", np.nan), errors="coerce").replace([np.inf, -np.inf], np.nan)
+    raw_share = _numeric_series(df, "vp_share").replace([np.inf, -np.inf], np.nan)
     raw_share = raw_share.where(raw_share <= 1.0, raw_share / 100.0)
     share_med = float(raw_share.median()) if raw_share.notna().any() else 0.0
     share = raw_share.fillna(share_med).clip(lower=0.0, upper=1.0)
@@ -93,21 +99,20 @@ def normalise_columns(df: pd.DataFrame, preprocessor: Dict[str, Any]) -> pd.Data
     out["label_id"] = out["label_id"].fillna(-1).astype(int)
 
     vp_cfg = preprocessor["voting_power"]
-    vp = pd.to_numeric(out.get("voting_power", np.nan), errors="coerce").replace([np.inf, -np.inf], np.nan)
+    vp = _numeric_series(out, "voting_power").replace([np.inf, -np.inf], np.nan)
     vp = vp.mask(vp < 0.0, np.nan).fillna(float(vp_cfg["median_raw_nonneg"]))
     vp = vp.clip(lower=0.0, upper=float(vp_cfg["cap_value"]))
     vp = (np.log1p(vp) - float(vp_cfg["log_center"])) / float(vp_cfg["log_scale"])
     out["voting_power"] = vp.astype(float)
 
-    sh_cfg = preprocessor["vp_share"]
-    share = pd.to_numeric(out.get("vp_share", np.nan), errors="coerce").replace([np.inf, -np.inf], np.nan)
-    share = share.where(share <= 1.0, share / 100.0).fillna(float(sh_cfg["median_raw"]))
-    share = share.clip(lower=0.0, upper=1.0)
-    share = (share - float(sh_cfg["center"])) / float(sh_cfg["scale"])
-    out["vp_share"] = share.astype(float)
+    if "vp_share" in out.columns:
+        share = _numeric_series(out, "vp_share").replace([np.inf, -np.inf], np.nan)
+        share = share.where(share <= 1.0, share / 100.0).fillna(float(sh_cfg["median_raw"]))
+        share = share.clip(lower=0.0, upper=1.0)
+        share = (share - float(sh_cfg["center"])) / float(sh_cfg["scale"])
+        out["vp_share"] = share.astype(float)
 
     out["is_whale"] = _to_bool_series(out.get("is_whale", False))
-    out["aligned_with_majority"] = _to_bool_series(out.get("aligned_with_majority", False))
 
     ex = preprocessor.get("extra_robust") or {}
     for col in ("dao_cluster", "voter_cluster"):
@@ -135,7 +140,8 @@ def _to_bool_series(col: pd.Series) -> pd.Series:
 
 
 def select_numeric_columns() -> List[str]:
-    return ["voting_power", "vp_share", "is_whale", "aligned_with_majority", "dao_cluster", "voter_cluster"]
+    """Leakage-safe model inputs (no label-derived or unverified post-hoc fields)."""
+    return ["voting_power", "is_whale", "dao_cluster", "voter_cluster"]
 
 
 def load_dataset(csv_path: Path) -> pd.DataFrame:

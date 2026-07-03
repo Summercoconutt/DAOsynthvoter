@@ -1,5 +1,7 @@
 """
 Voter–space clustering: Mode A (per DAO cluster) or Mode B (global + dao_cluster feature).
+
+EXPLORATORY ONLY — outputs must not feed behaviour modelling (Stage 8 fits train-only clusters).
 """
 
 from __future__ import annotations
@@ -35,17 +37,21 @@ from .config import (
 FEATURE_COLS: List[str] = [
     "log_total_votes",
     "avg_voting_power",
+    "std_voting_power",
+    "active_span_days",
+    "vote_frequency",
+    "participation_rate",
+    "n_daos_participated",
+]
+
+# Legacy label-heavy columns kept for reference / EDA only (do not use for predictive clustering).
+EXPLORATORY_LABEL_FEATURE_COLS: List[str] = [
     "pct_for_votes",
     "pct_against_votes",
     "pct_abstain_votes",
     "pct_aligned_with_majority",
-    "is_whale_ratio",
-    "participation_rate",
-    "active_span_days",
-    "vote_frequency",
     "vote_entropy",
-    "std_voting_power",
-    "n_daos_participated",
+    "is_whale_ratio",
 ]
 
 

@@ -121,7 +121,7 @@ def normalise_columns(df: pd.DataFrame, preprocessor: Dict[str, Any]) -> pd.Data
 
 
 def select_numeric_columns() -> List[str]:
-    return ["voting_power", "vp_share", "is_whale", "aligned_with_majority", "dao_cluster", "voter_cluster"]
+    return ["voting_power", "is_whale", "dao_cluster", "voter_cluster"]
 
 
 def split_by_voter(df: pd.DataFrame, train_frac: float = 0.8, seed: int = 42) -> Tuple[pd.DataFrame, pd.DataFrame]:

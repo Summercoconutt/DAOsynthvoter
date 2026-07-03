@@ -17,7 +17,14 @@ IMPORTANT — use branch: carlo_dev
 5. Order of sanity checks:
    - python scripts/10_run_detection_mode.py [--skip-raw-scan if raw dir absent]
    - python scripts/10_run_detection_mode.py --smoke-train   (tiny RoBERTa train; configs/smoke_behaviour.yaml)
-   - Full stage 08 only after prerequisites pass (merged votes + voter cluster CSV exist).
+   - Full stage 08 only after prerequisites pass (cleaned votes + dao_feature_table.csv).
+   - python -m pytest tests/test_leakage_safe_pipeline.py -v   (9 tests, no GPU)
+
+5b. LEAKAGE-SAFE Stage 8 (carlo_dev, 2026-07):
+   - Stage 6/7 cluster CSVs are NOT used by stage 08.
+   - Minimum: stage 03 (votes_cleaned.parquet) + stage 04 (dao_feature_table.csv).
+   - See docs/SUPERVISOR_LEAKAGE_SAFE_GUIDE.md (Chinese, detailed) and docs/LEAKAGE_SAFE_RUNBOOK.md.
+   - Old models with feat_dim=10 are incompatible; retrain stage 08.
 
 6. RoBERTa behaviour training:
    scripts/08_run_behaviour_modelling.py --config configs/default.yaml  (+ optional --extra-config)

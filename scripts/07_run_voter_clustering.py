@@ -76,11 +76,14 @@ def main() -> None:
     rep_path.write_text(
         "\n".join(
             [
-                "# Stage 7 — Voter clustering",
+                "# Stage 7 — Voter clustering (exploratory)",
+                "",
+                "Stage 7 outputs are for **EDA / dissertation figures only**.",
+                "Behaviour modelling (Stage 8) fits **train-only structural clusters** internally.",
                 "",
                 f"- Master with DAO labels: `{out_merged}`",
                 f"- Voter features (filtered): `{feat_f}`",
-                f"- Assignments: `{assign}`",
+                f"- Exploratory assignments: `{assign}`",
                 f"- Summary: `{summary}`",
                 "",
             ]
