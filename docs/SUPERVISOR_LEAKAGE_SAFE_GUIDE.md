@@ -1,30 +1,30 @@
-# 导师运行说明 — 无泄漏行为建模（carlo_dev 分支）
+# Supervisor Runbook — Leakage-Safe Behaviour Modelling (`carlo_dev`)
 
-本文档面向在实验室服务器上复现 **Stage 8 行为预测模型** 的导师/审稿人。代码仓库：
+This guide is for supervisors and reviewers reproducing **Stage 8 behaviour prediction** on the lab server.
 
-**https://github.com/Summercoconutt/DAOsynthvoter/tree/carlo_dev**
+**Repository:** https://github.com/Summercoconutt/DAOsynthvoter/tree/carlo_dev
 
-请务必使用 **`carlo_dev` 分支**，不要使用 `main`（`main` 缺少 Stage 09 评估、Stage 10 检测模式及本次泄漏修复）。
-
----
-
-## 1. 本次更新做了什么（为何必须重新训练）
-
-此前版本存在 **数据泄漏**，会导致测试集指标虚高、论文结论不可信。本次在 `carlo_dev` 上已修复，主要变更如下：
-
-| 项目 | 修复前 | 修复后 |
-|------|--------|--------|
-| `aligned_with_majority`、`vp_share` | 作为模型数值输入 | **已从模型输入中移除** |
-| 滑动窗口分组 | 仅按 `voter` | 按 **`(voter, space)`** |
-| DAO / 选民聚类 | Stage 6/7 全量数据 + 含标签统计特征 | **仅在训练集选民上拟合**，再分配到 val/test |
-| Stage 7 输出 | 直接喂给行为模型 | **仅作探索性分析（EDA）**，不参与 Stage 8 |
-| 模型数值特征维度 | 10（含泄漏列） | **8**（4 个数值 + 4 个时间编码） |
-
-**重要：** 用旧代码训练的 checkpoint（`feat_dim=10`）与本次代码 **不兼容**，必须重新运行 Stage 08。
+Use the **`carlo_dev` branch** only — not `main` (`main` lacks Stage 09 evaluation, Stage 10 detection mode, and the leakage fixes described here).
 
 ---
 
-## 2. 环境准备
+## 1. What changed (and why you must retrain)
+
+The previous version had **data leakage** that inflated test metrics and undermined thesis conclusions. The fixes on `carlo_dev` are:
+
+| Item | Before | After |
+|------|--------|-------|
+| `aligned_with_majority`, `vp_share` | Model numeric inputs | **Removed** from model inputs |
+| Sliding-window grouping | By `voter` only | By **`(voter, space)`** |
+| DAO / voter clusters | Stage 6/7 on full data + label-heavy stats | **Fit on training voters only**, then assigned to val/test |
+| Stage 7 output | Fed into behaviour model | **Exploratory / EDA only** — not used in Stage 8 |
+| Numeric feature dimension | 10 (included leaky columns) | **8** (4 numeric + 4 time encodings) |
+
+**Important:** Checkpoints trained with the old code (`feat_dim=10`) are **incompatible**. You must re-run Stage 08.
+
+---
+
+## 2. Environment setup
 
 ```bash
 git clone https://github.com/Summercoconutt/DAOsynthvoter.git
@@ -37,17 +37,17 @@ export PYTHONPATH="$(pwd)/src"    # Windows PowerShell: $env:PYTHONPATH = "src"
 ```
 
 - Python **3.10+**
-- GPU 可选；RoBERTa 训练建议 CUDA；可用 `configs/smoke_behaviour.yaml` 做快速冒烟
-- Stage 08b（无 RoBERTa 数值基线）需要 **duckdb**（已在 `requirements.txt`）
+- GPU optional; CUDA recommended for RoBERTa; use `configs/smoke_behaviour.yaml` for a quick smoke test
+- Stage 08b (numeric-only baseline, no RoBERTa) requires **duckdb** (listed in `requirements.txt`)
 
 ---
 
-## 3. 数据与路径配置
+## 3. Data and path configuration
 
-原始投票数据通常在服务器磁盘（例如 `D:/111111/Data`），**不要**把清洗结果写回原始目录。
+Raw vote data usually lives on a server disk (e.g. `D:/111111/Data`). **Do not** write cleaned outputs back into the raw archive.
 
-1. 复制并编辑 `configs/example_server_raw.yaml`，将 `paths.master_votes_parquet` 设为 **绝对路径** 指向未清洗 parquet。
-2. 运行 Stage 03 时合并配置：
+1. Copy and edit `configs/example_server_raw.yaml`; set `paths.master_votes_parquet` to an **absolute path** to the uncleaned parquet.
+2. Run Stage 03 with the extra config merged:
 
 ```bash
 python scripts/03_run_global_cleaning.py \
@@ -55,165 +55,165 @@ python scripts/03_run_global_cleaning.py \
   --extra-config configs/example_server_raw.yaml
 ```
 
-清洗输出仅写入本仓库下的 `data/processed/votes_cleaned.parquet`（见 `configs/default.yaml` 中 `paths.cleaned_master_parquet`）。
+Cleaned output is written only under this repo: `data/processed/votes_cleaned.parquet` (see `paths.cleaned_master_parquet` in `configs/default.yaml`).
 
-### Stage 8 最低前置条件（不必跑完 Stage 5–7）
+### Stage 8 minimum prerequisites (Stages 5–7 not required)
 
-| 文件 | 产生阶段 | 用途 |
-|------|----------|------|
-| `data/processed/votes_cleaned.parquet` | Stage 03 | 行为数据集构建 |
-| `data/processed/dao_feature_table.csv` | Stage 04 | 训练集上拟合 **结构型** DAO 聚类 |
+| File | Produced by | Purpose |
+|------|-------------|---------|
+| `data/processed/votes_cleaned.parquet` | Stage 03 | Behaviour dataset build |
+| `data/processed/dao_feature_table.csv` | Stage 04 | **Structural** DAO clustering (train-only fit) |
 
-Stage 6（DAO 聚类）、Stage 7（选民聚类）**可选**，仅用于论文中的聚类探索图/表，**不再**作为行为模型输入来源。
+Stage 6 (DAO clustering) and Stage 7 (voter clustering) are **optional** — for exploratory figures/tables in the paper only. They are **not** behaviour-model inputs in the leakage-safe path.
 
 ---
 
-## 4. 推荐运行顺序（服务器）
+## 4. Recommended run order (server)
 
-### 4.1 检测模式（先跑，确认路径与列名正确）
+### 4.1 Detection mode (run first — verify paths and columns)
 
 ```bash
-# 只检查前置文件（不扫描原始盘）
+# Prerequisite check only (no raw-disk scan)
 python scripts/10_run_detection_mode.py --skip-raw-scan
 
-# 可选：1 epoch 冒烟训练（RoBERTa + 数值特征）
+# Optional: 1-epoch smoke train (RoBERTa + numeric features)
 python scripts/10_run_detection_mode.py --skip-raw-scan --smoke-train
 ```
 
-报告：`outputs/reports/detection_mode_report.md`
+Report: `outputs/reports/detection_mode_report.md`
 
-### 4.2 若尚未清洗 / 建 DAO 特征表
+### 4.2 If cleaning / DAO feature table not done yet
 
 ```bash
 python scripts/03_run_global_cleaning.py --config configs/default.yaml --extra-config configs/example_server_raw.yaml
 python scripts/04_run_dao_metrics.py --config configs/default.yaml
 ```
 
-### 4.3 行为模型训练（泄漏安全流程）
+### 4.3 Behaviour model training (leakage-safe)
 
-**RoBERTa 主模型：**
+**RoBERTa main model:**
 
 ```bash
 python scripts/08_run_behaviour_modelling.py --config configs/default.yaml
 ```
 
-**无 RoBERTa 数值基线（对比实验）：**
+**Numeric-only baseline (no RoBERTa, for comparison):**
 
 ```bash
 python scripts/08b_run_behaviour_modelling_no_roberta.py --config configs/default.yaml
 ```
 
-详见 `docs/SUPERVISOR_NO_ROBERTA_RUNBOOK.md`。
+See `docs/SUPERVISOR_NO_ROBERTA_RUNBOOK.md` for 08b details.
 
-### 4.4 训练后综合评估（Stage 09）
+### 4.4 Post-training evaluation (Stage 09)
 
-使用与训练相同的选民划分（`outputs/processed/split_manifest.json`）：
+Uses the **same voter split** as training (`outputs/processed/split_manifest.json`):
 
 ```bash
 python scripts/09_run_behaviour_evaluation.py --config configs/default.yaml --split test
 python scripts/09_run_behaviour_evaluation.py --config configs/default.yaml --split val
 ```
 
-输出目录：`outputs/tables/eval/{test|val}/`（含 F1、ECE、混淆矩阵、按聚类分层指标等）。
+Outputs: `outputs/tables/eval/{test|val}/` (F1, ECE, confusion matrices, stratified cluster metrics, etc.).
 
-### 4.5 自动化测试（验证泄漏修复逻辑）
+### 4.5 Automated tests (leakage-fix verification)
 
 ```bash
 python -m pytest tests/test_leakage_safe_pipeline.py -v
 ```
 
-预期：**9 passed**（无需 GPU、无需真实数据）。
+Expected: **9 passed** (no GPU or real server data required).
 
 ---
 
-## 5. Stage 8 内部流程（供审稿核对）
+## 5. Stage 8 internal pipeline (for review)
 
 ```
-构建 behaviour_dataset.csv（无聚类列）
-    → 按 voter 划分 train / val / test
-    → 仅在 train 上拟合数值预处理器（VP 截断等）
-    → 仅在 train 上拟合结构型 DAO / 选民 KMeans
-    → 将聚类 ID 分配到全部划分（transform only）
-    → 构建 (voter, space) 滑动窗口
-    → 训练 TimeSeriesClassifier（DistilRoBERTa + 数值 + 时间）
+Build behaviour_dataset.csv (no cluster columns)
+    → Split voters into train / val / test
+    → Fit numeric preprocessor on train only (VP capping, etc.)
+    → Fit structural DAO / voter KMeans on train only
+    → Assign cluster IDs to all splits (transform only)
+    → Build (voter, space) sliding windows
+    → Train TimeSeriesClassifier (DistilRoBERTa + numeric + time)
 ```
 
-关键实现文件：
+Key implementation files:
 
-- `src/dao_governance/features/behaviour_pipeline.py` — 编排上述流程
-- `src/dao_governance/features/causal_clusters.py` — 训练集专用聚类
-- `src/dao_governance/modelling/preprocess.py` — 数值列：`voting_power`, `is_whale`, `dao_cluster`, `voter_cluster`
-- `src/dao_governance/modelling/windows.py` — 窗口构建与标签历史
-
----
-
-## 6. 主要输出文件
-
-| 路径 | 说明 |
-|------|------|
-| `outputs/tables/behaviour_dataset.csv` | 票级数据，**不含**聚类 |
-| `outputs/tables/behaviour_dataset_with_clusters.csv` | 含训练集拟合的聚类 ID（08b 缓存用） |
-| `outputs/processed/split_manifest.json` | 选民三分划 |
-| `outputs/models/predictive_clusters/cluster_bundle.pkl` | 聚类模型（仅 train 拟合） |
-| `outputs/models/behaviour_agent2/` | RoBERTa 模型、`config.json`（含 `feat_dim=8`） |
-| `outputs/reports/stage08_behaviour_modelling.md` | Stage 8 摘要 |
-| `outputs/tables/eval/test/metrics_report.md` | Stage 9 测试集指标 |
+- `src/dao_governance/features/behaviour_pipeline.py` — orchestration
+- `src/dao_governance/features/causal_clusters.py` — train-only clustering
+- `src/dao_governance/modelling/preprocess.py` — numeric columns: `voting_power`, `is_whale`, `dao_cluster`, `voter_cluster`
+- `src/dao_governance/modelling/windows.py` — window build and label history
 
 ---
 
-## 7. 配置项（`configs/default.yaml`）
+## 6. Main output files
+
+| Path | Description |
+|------|-------------|
+| `outputs/tables/behaviour_dataset.csv` | Vote-level table, **no** clusters |
+| `outputs/tables/behaviour_dataset_with_clusters.csv` | Train-fitted cluster IDs (for 08b cache) |
+| `outputs/processed/split_manifest.json` | Three-way voter split |
+| `outputs/models/predictive_clusters/cluster_bundle.pkl` | Cluster models (train-fit only) |
+| `outputs/models/behaviour_agent2/` | RoBERTa model + `config.json` (`feat_dim=8`) |
+| `outputs/reports/stage08_behaviour_modelling.md` | Stage 8 summary |
+| `outputs/tables/eval/test/metrics_report.md` | Stage 9 test metrics |
+
+---
+
+## 7. Configuration (`configs/default.yaml`)
 
 ```yaml
 behaviour_model:
-  use_dao_clusters: true    # 设为 false 可做消融
+  use_dao_clusters: true    # set false for ablation
   use_voter_clusters: true
   group_windows_by: [voter, space]
 ```
 
-`predictive_cluster_artifacts_dir` 默认：`outputs/models/predictive_clusters`
+Default `predictive_cluster_artifacts_dir`: `outputs/models/predictive_clusters`
 
 ---
 
-## 8. 大数据集与缓存（08b）
+## 8. Large datasets and caching (08b)
 
-首次运行 08 或 08b 会生成 split manifest 与 enriched CSV。之后可复用：
+The first run of 08 or 08b creates the split manifest and enriched CSV. Subsequent runs can reuse them:
 
 ```bash
 python scripts/08b_run_behaviour_modelling_no_roberta.py --config configs/default.yaml \
   --reuse-split-manifest --reuse-window-cache
 ```
 
-**注意：** 更新泄漏修复相关代码后，应删除 `outputs/behaviour_modelling/window_cache_no_roberta/` 强制重建缓存。
+**Note:** After pulling leakage-fix code changes, delete `outputs/behaviour_modelling/window_cache_no_roberta/` to force a cache rebuild.
 
 ---
 
-## 9. 已知限制（非泄漏，但需在论文中说明）
+## 9. Known limitations (not leakage, but disclose in the thesis)
 
-1. **`is_whale`**：若上游导出使用全量 q99 阈值，可能存在轻微未来信息；当前保留作结构特征。
-2. **DAO 结构指标（Stage 4）**：使用全历史聚合，属时间性局限，非标签泄漏。
-3. **聚类 ID**：对每个 `(voter, space)` 在划分内为静态值（仅结构特征，不含投票标签统计）。
-4. **文本中的 `[LABEL_k]` 前缀**：仅为同一选民历史投票的自回归输入，当前步标签不作为数值特征。
-
----
-
-## 10. 故障排查
-
-| 现象 | 处理 |
-|------|------|
-| `feat_dim` 不匹配 / 加载 `model.pt` 失败 | 删除 `outputs/models/behaviour_agent2/`，重新跑 Stage 08 |
-| detection 报缺少 `votes_cleaned.parquet` | 先跑 Stage 03 |
-| 报缺少 `dao_feature_table.csv` | 先跑 Stage 04 |
-| 窗口数为 0 | 检查清洗后是否有足够 `(voter, space)` 投票；调低 `min_votes_per_pair`（聚类模块内） |
-| pytest 失败 | 在仓库根目录执行，确认 `PYTHONPATH=src` |
+1. **`is_whale`:** If the upstream export uses a global q99 threshold, slight future information is possible; kept as a structural feature for now.
+2. **DAO structural metrics (Stage 4):** Full-history aggregates — temporal limitation, not label leakage.
+3. **Cluster IDs:** Static per `(voter, space)` within a split (structural features only; no vote-label statistics).
+4. **`[LABEL_k]` text prefixes:** Autoregressive history for past votes in the same sequence; current-step label is not a numeric feature.
 
 ---
 
-## 11. 相关文档
+## 10. Troubleshooting
 
-- `docs/Feature_Specification.md` — 全流水线特征目录与 Stage 8 输入规范（`feat_dim=8`）
-- `docs/Leakage_Audit.md` — 泄漏问题登记表、修复状态、严重性排序与验证清单
-- `docs/LEAKAGE_SAFE_RUNBOOK.md` — 英文简明运行说明
-- `docs/SUPERVISOR_NO_ROBERTA_RUNBOOK.md` — 08b 无 RoBERTa 基线
-- `SERVER_CHECKLIST.txt` — 服务器检查清单（简版）
+| Symptom | Action |
+|---------|--------|
+| `feat_dim` mismatch / `model.pt` load failure | Delete `outputs/models/behaviour_agent2/` and re-run Stage 08 |
+| Detection reports missing `votes_cleaned.parquet` | Run Stage 03 first |
+| Missing `dao_feature_table.csv` | Run Stage 04 first |
+| Zero windows | Check cleaned data has enough `(voter, space)` votes; lower `min_votes_per_pair` in clustering module |
+| pytest failures | Run from repo root with `PYTHONPATH=src` |
 
-如有问题，请对照 `outputs/reports/` 下各 stage 的 markdown 报告与 `tests/test_leakage_safe_pipeline.py` 中的断言逻辑。
+---
+
+## 11. Related documentation
+
+- `docs/Feature_Specification.md` — full feature catalogue and Stage 8 input spec (`feat_dim=8`)
+- `docs/Leakage_Audit.md` — leakage issue register, fix status, severity ranking, verification checklist
+- `docs/LEAKAGE_SAFE_RUNBOOK.md` — short English runbook
+- `docs/SUPERVISOR_NO_ROBERTA_RUNBOOK.md` — 08b numeric-only baseline
+- `SERVER_CHECKLIST.txt` — quick server checklist
+
+For debugging, cross-check markdown reports under `outputs/reports/` and assertions in `tests/test_leakage_safe_pipeline.py`.

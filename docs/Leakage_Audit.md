@@ -299,7 +299,7 @@ python -m pytest tests/test_leakage_safe_pipeline.py -v
 | Document | Purpose |
 |----------|---------|
 | `docs/Feature_Specification.md` | Full feature catalogue and `feat_dim` layout |
-| `docs/SUPERVISOR_LEAKAGE_SAFE_GUIDE.md` | Chinese server runbook for supervisor |
+| `docs/SUPERVISOR_LEAKAGE_SAFE_GUIDE.md` | Detailed server runbook for supervisor |
 | `docs/LEAKAGE_SAFE_RUNBOOK.md` | Short English runbook |
 | `SERVER_CHECKLIST.txt` | Quick server checklist |
 

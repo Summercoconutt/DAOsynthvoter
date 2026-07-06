@@ -4,7 +4,7 @@ Stage 8 no longer uses Stage 6/7 cluster CSVs. It fits **train-only structural c
 
 **Branch:** `carlo_dev` on https://github.com/Summercoconutt/DAOsynthvoter
 
-**Supervisor guide (Chinese):** `docs/SUPERVISOR_LEAKAGE_SAFE_GUIDE.md`
+**Supervisor guide (detailed):** `docs/SUPERVISOR_LEAKAGE_SAFE_GUIDE.md`
 
 ## Server run (after stages 3–4 minimum)
 

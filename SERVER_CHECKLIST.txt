@@ -23,7 +23,7 @@ IMPORTANT — use branch: carlo_dev
 5b. LEAKAGE-SAFE Stage 8 (carlo_dev, 2026-07):
    - Stage 6/7 cluster CSVs are NOT used by stage 08.
    - Minimum: stage 03 (votes_cleaned.parquet) + stage 04 (dao_feature_table.csv).
-   - See docs/SUPERVISOR_LEAKAGE_SAFE_GUIDE.md (Chinese, detailed) and docs/LEAKAGE_SAFE_RUNBOOK.md.
+   - See docs/SUPERVISOR_LEAKAGE_SAFE_GUIDE.md (detailed) and docs/LEAKAGE_SAFE_RUNBOOK.md (short).
    - Old models with feat_dim=10 are incompatible; retrain stage 08.
 
 6. RoBERTa behaviour training:
