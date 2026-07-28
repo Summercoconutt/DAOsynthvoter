@@ -31,6 +31,17 @@ SLIM_COLUMNS = [
     "voter_cluster",
 ]
 
+SLIM_SELECT = """
+    CAST(voter AS VARCHAR) AS voter,
+    CAST(space AS VARCHAR) AS space,
+    vote_ts AS vote_ts,
+    label_id AS label_id,
+    voting_power AS voting_power,
+    is_whale AS is_whale,
+    dao_cluster AS dao_cluster,
+    voter_cluster AS voter_cluster
+"""
+
 
 def _register_voters(con: duckdb.DuckDBPyConnection, voters: List[str], table_name: str) -> None:
     con.register(table_name, pd.DataFrame({"voter": voters}))
@@ -140,7 +151,8 @@ def materialize_split_cache(
 
     rel = con.execute(
         f"""
-        SELECT {", ".join(SLIM_COLUMNS)}
+                SELECT
+                        {SLIM_SELECT}
         FROM read_csv(?, {READ_CSV_OPTS})
         WHERE label_id IN (0, 1, 2)
           AND voter IN (SELECT voter FROM {voters_table})
@@ -172,6 +184,16 @@ def materialize_split_cache(
         if not carry_over.empty:
             chunk = pd.concat([carry_over, chunk], ignore_index=True)
             carry_over = pd.DataFrame(columns=SLIM_COLUMNS)
+
+        # Defensive normalization in case mixed-case CSV labels are returned.
+        chunk.columns = [str(c).strip().lower() for c in chunk.columns]
+        required = ["voter", "space", "vote_ts", "label_id"]
+        missing = [c for c in required if c not in chunk.columns]
+        if missing:
+            raise KeyError(
+                f"Window cache input missing columns {missing}. "
+                f"Available columns: {list(chunk.columns)}"
+            )
 
         chunk["voter"] = chunk["voter"].astype(str)
         chunk["space"] = chunk["space"].astype(str)

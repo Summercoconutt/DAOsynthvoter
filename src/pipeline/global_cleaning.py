@@ -44,8 +44,14 @@ def _standardize_vote_columns(df: pd.DataFrame) -> pd.DataFrame:
         "Original Choice": "original_choice",
     }
     for src, dst in rename_map.items():
-        if src in out.columns and dst not in out.columns:
+        if src not in out.columns:
+            continue
+        if dst not in out.columns:
             out = out.rename(columns={src: dst})
+            continue
+        # If both alias and canonical exist, preserve canonical and backfill nulls.
+        out[dst] = out[dst].where(out[dst].notna(), out[src])
+        out = out.drop(columns=[src])
     return out
 
 

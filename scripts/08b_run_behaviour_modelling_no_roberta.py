@@ -30,6 +30,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 import numpy as np
+import pandas as pd
 import torch
 from sklearn.metrics import confusion_matrix
 from torch.utils.data import DataLoader
@@ -178,6 +179,28 @@ def _load_preprocessor_from_config(path: Path) -> Dict[str, Any]:
     return pre
 
 
+def _assert_csv_schema(csv_path: Path, required: list[str]) -> None:
+    cols = [str(c).strip() for c in pd.read_csv(csv_path, nrows=0).columns.tolist()]
+    by_lower: Dict[str, List[str]] = {}
+    for c in cols:
+        by_lower.setdefault(c.lower(), []).append(c)
+
+    dup_aliases = {k: v for k, v in by_lower.items() if len(v) > 1}
+    if dup_aliases:
+        raise ValueError(
+            f"[08b] Ambiguous case-variant columns in {csv_path}: {dup_aliases}. "
+            "Please keep only canonical lowercase names."
+        )
+
+    lower_cols = [c.lower() for c in cols]
+    missing = [c for c in required if c not in lower_cols]
+    if missing:
+        raise ValueError(
+            f"[08b] Missing required columns in {csv_path}: {missing}. "
+            f"Available columns: {cols}"
+        )
+
+
 def _prepare_from_cache(
     *,
     behaviour_csv: Path,
@@ -316,6 +339,7 @@ def main() -> None:
     cache_csv = enriched_csv if enriched_csv.exists() else behaviour_csv
     csv_bytes = cache_csv.stat().st_size if cache_csv.exists() else 0
     use_cache = args.reuse_split_manifest or csv_bytes > 1_000_000_000
+    _assert_csv_schema(cache_csv, required=["voter", "space", "vote_ts", "label_id"])
 
     preprocessor: Dict[str, Any] | None = None
     prep_source = args.reuse_preprocessor_from.strip()
@@ -373,6 +397,7 @@ def main() -> None:
             raise RuntimeError("[08b] Preprocessor not available after cache prep.")
 
         cache_csv = enriched_csv
+        _assert_csv_schema(cache_csv, required=["voter", "space", "vote_ts", "label_id"])
         print(f"[08b] Large-dataset mode (CSV {cache_csv.stat().st_size / 1e9:.1f} GB), split manifest: {split_path}")
         prep_report.write_text(
             "# Preprocessing report (No-RoBERTa)\n\n"
