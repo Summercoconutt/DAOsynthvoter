@@ -67,13 +67,6 @@ def compute_class_weights(y: np.ndarray, num_classes: int = 3) -> torch.Tensor:
     return torch.tensor(w, dtype=torch.float32)
 
 
-def _maybe_sub(ws: list, cap: int, rng: np.random.Generator) -> list:
-    if cap <= 0 or len(ws) <= cap:
-        return ws
-    idx = rng.choice(len(ws), size=cap, replace=False)
-    return [ws[i] for i in sorted(idx)]
-
-
 def _parse_best_f1_from_report(path: Path) -> Optional[float]:
     if not path.exists():
         return None
@@ -181,19 +174,21 @@ def _load_preprocessor_from_config(path: Path) -> Dict[str, Any]:
 
 def _assert_csv_schema(csv_path: Path, required: list[str]) -> None:
     cols = [str(c).strip() for c in pd.read_csv(csv_path, nrows=0).columns.tolist()]
-    by_lower: Dict[str, List[str]] = {}
-    for c in cols:
-        by_lower.setdefault(c.lower(), []).append(c)
-
-    dup_aliases = {k: v for k, v in by_lower.items() if len(v) > 1}
-    if dup_aliases:
-        raise ValueError(
-            f"[08b] Ambiguous case-variant columns in {csv_path}: {dup_aliases}. "
-            "Please keep only canonical lowercase names."
-        )
-
     lower_cols = [c.lower() for c in cols]
-    missing = [c for c in required if c not in lower_cols]
+
+    # Accept mixed-case variants by normalizing to lowercase and keeping the
+    # first canonical spelling encountered. This prevents transient CSV exports
+    # from failing when they contain both 'space' and 'Space'.
+    normalized = []
+    seen = set()
+    for c in cols:
+        key = c.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(key)
+
+    missing = [c for c in required if c not in normalized]
     if missing:
         raise ValueError(
             f"[08b] Missing required columns in {csv_path}: {missing}. "
@@ -238,6 +233,10 @@ def _resolve_master_parquet(base: Path, paths: dict) -> Path:
     raise FileNotFoundError(f"Need cleaned or master votes parquet under {base}")
 
 
+def _log_phase(message: str) -> None:
+    print(f"[08b] {message}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", type=str, default="configs/default.yaml")
@@ -279,10 +278,12 @@ def main() -> None:
     )
     args = ap.parse_args()
 
+    _log_phase("starting no-RoBERTa behaviour modelling run")
     base = project_root()
     cfg_path = (base / args.config).resolve() if not Path(args.config).is_absolute() else Path(args.config)
     extra = (base / args.extra_config).resolve() if args.extra_config else None
     cfg = load_config(config_path=cfg_path, extra_path=extra)
+    _log_phase(f"loaded config from {cfg_path}")
 
     seed = int(cfg.get("project", {}).get("seed", 42))
     random.seed(seed)
@@ -322,13 +323,14 @@ def main() -> None:
         d.mkdir(parents=True, exist_ok=True)
 
     if not args.reuse_behaviour_csv or not behaviour_csv.exists():
+        _log_phase("building behaviour dataset CSV")
         _, rep_b = build_behaviour_dataset(master_parquet, output_csv=behaviour_csv)
         br_path = prep_report.parent / "behaviour_dataset_quality_no_roberta.md"
         br_path.write_text(rep_b.to_markdown("Behaviour dataset (build)"), encoding="utf-8")
     else:
         print("[08b] Reusing existing behaviour CSV:", behaviour_csv)
 
-    raw_df = load_behaviour_votes(behaviour_csv)
+    raw_df: pd.DataFrame | None = None
     train_frac = float(bm.get("train_frac", 0.7))
     val_frac = float(bm.get("val_frac", 0.15))
     window_size = int(bm.get("window", 5))
@@ -359,7 +361,11 @@ def main() -> None:
             pre_path = Path("")
 
     if use_cache:
+        _log_phase("using large-dataset cache mode")
         if not split_path.exists():
+            _log_phase("creating split manifest")
+            _log_phase("loading behaviour dataset")
+            raw_df = load_behaviour_votes(behaviour_csv)
             tr, va, te = split_by_voter_three_way(raw_df, train_frac=train_frac, val_frac=val_frac, seed=seed)
             save_split_manifest(
                 split_path,
@@ -374,7 +380,10 @@ def main() -> None:
 
         need_prepare = not enriched_csv.exists() or not pre_path.exists()
         if need_prepare:
-            print("[08b] Building enriched CSV + preprocessor (train-only clusters)...")
+            _log_phase("building enriched CSV + preprocessor (train-only clusters)")
+            if raw_df is None:
+                _log_phase("loading behaviour dataset")
+                raw_df = load_behaviour_votes(behaviour_csv)
             _, _, _, preprocessor, _, tr_a, va_a, te_a = prepare_behaviour_splits(
                 raw_df,
                 dao_feature_table_path=dao_feat,
@@ -405,6 +414,7 @@ def main() -> None:
             f"- Model numeric columns: **{select_numeric_columns()}**\n",
             encoding="utf-8",
         )
+        _log_phase("materializing window cache")
         train_ds, valid_ds, _cache_meta = _prepare_from_cache(
             behaviour_csv=cache_csv,
             split_path=split_path,
@@ -417,6 +427,9 @@ def main() -> None:
         train_labels = np.asarray(train_ds.labels)
         valid_labels = np.asarray(valid_ds.labels)
     else:
+        _log_phase("loading behaviour dataset")
+        raw_df = load_behaviour_votes(behaviour_csv)
+        _log_phase("splitting data by voter")
         train_raw, val_raw, test_raw = split_by_voter_three_way(
             raw_df, train_frac=train_frac, val_frac=val_frac, seed=seed
         )
@@ -431,6 +444,7 @@ def main() -> None:
         )
         print(f"[08b] Split manifest: {split_path}")
 
+        _log_phase("preparing train/val/test splits and fitting structural clusters")
         train_df, val_df, test_df, preprocessor, cluster_bundle, tr_a, va_a, te_a = prepare_behaviour_splits(
             raw_df,
             dao_feature_table_path=dao_feat,
@@ -465,13 +479,6 @@ def main() -> None:
         if not train_windows or not valid_windows:
             raise RuntimeError("Empty windows. Increase data volume or reduce window size in config.")
 
-        max_tr = args.max_train_windows if args.max_train_windows is not None else int(bm.get("max_train_windows", 0))
-        max_va = args.max_valid_windows if args.max_valid_windows is not None else int(bm.get("max_valid_windows", 0))
-        rng_sub = np.random.default_rng(seed)
-        train_windows = _maybe_sub(train_windows, max_tr, rng_sub)
-        valid_windows = _maybe_sub(valid_windows, max_va, rng_sub)
-        print(f"[08b] windows: train={len(train_windows)} valid={len(valid_windows)}")
-
         train_ds = NumericWindowDataset(train_windows)
         valid_ds = NumericWindowDataset(valid_windows)
         feat_dim = len(train_windows[0].window_features[0])
@@ -494,6 +501,7 @@ def main() -> None:
         print(f"[08b] subsampled valid windows -> {max_va}")
 
     print(f"[08b] final windows: train={len(train_ds)} valid={len(valid_ds)} feat_dim={feat_dim}")
+    _log_phase("initializing numeric-only model")
 
     batch_size = int(bm.get("batch_size", 16))
     epochs = int(bm.get("epochs", 4))
@@ -502,10 +510,23 @@ def main() -> None:
     max_grad_norm = float(bm.get("max_grad_norm", 1.0))
     dim_feedforward = int(bm.get("dim_feedforward", 1024))
 
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, collate_fn=numeric_collate_fn)
-    valid_loader = DataLoader(valid_ds, batch_size=batch_size, shuffle=False, collate_fn=numeric_collate_fn)
+    use_gpu = torch.cuda.is_available()
+    train_loader = DataLoader(
+        train_ds,
+        batch_size=batch_size,
+        shuffle=True,
+        collate_fn=numeric_collate_fn,
+        pin_memory=use_gpu,
+    )
+    valid_loader = DataLoader(
+        valid_ds,
+        batch_size=batch_size,
+        shuffle=False,
+        collate_fn=numeric_collate_fn,
+        pin_memory=use_gpu,
+    )
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = "cuda" if use_gpu else "cpu"
     model = NumericOnlyTimeSeriesClassifier(
         feat_dim=feat_dim,
         dropout=dropout,
@@ -519,6 +540,7 @@ def main() -> None:
     best_state = None
     train_lines: List[str] = []
 
+    _log_phase(f"starting training for {epochs} epochs")
     for epoch in range(epochs):
         model.train()
         tr_true, tr_pred, tr_loss = [], [], 0.0
@@ -615,6 +637,7 @@ def main() -> None:
     print(f"[08b] training report: {train_report}")
     print(f"[08b] preprocessing report: {prep_report}")
     print(f"[08b] comparison: {comparison_path}")
+    _log_phase("finished no-RoBERTa behaviour modelling run")
 
 
 if __name__ == "__main__":

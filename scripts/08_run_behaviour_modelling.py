@@ -66,6 +66,10 @@ def _resolve_master_parquet(base: Path, paths: dict) -> Path:
     )
 
 
+def _log_phase(message: str) -> None:
+    print(f"[08] {message}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", type=str, default="configs/default.yaml")
@@ -73,10 +77,12 @@ def main() -> None:
     ap.add_argument("--reuse-behaviour-csv", action="store_true", help="Skip rebuilding behaviour CSV if it exists.")
     args = ap.parse_args()
 
+    _log_phase("starting behaviour modelling run")
     base = project_root()
     cfg_path = (base / args.config).resolve() if not Path(args.config).is_absolute() else Path(args.config)
     extra = (base / args.extra_config).resolve() if args.extra_config else None
     cfg = load_config(config_path=cfg_path, extra_path=extra)
+    _log_phase(f"loaded config from {cfg_path}")
 
     seed = int(cfg.get("project", {}).get("seed", 42))
     random.seed(seed)
@@ -113,16 +119,19 @@ def main() -> None:
         d.mkdir(parents=True, exist_ok=True)
 
     if not args.reuse_behaviour_csv or not behaviour_csv.exists():
+        _log_phase("building behaviour dataset CSV")
         _, rep_b = build_behaviour_dataset(master_parquet, output_csv=behaviour_csv)
         br_path = prep_report.parent / "behaviour_dataset_quality.md"
         br_path.write_text(rep_b.to_markdown("Behaviour dataset (build)"), encoding="utf-8")
     else:
         print("[08] Reusing existing behaviour CSV:", behaviour_csv)
 
+    _log_phase("loading behaviour dataset")
     raw_df = load_behaviour_votes(behaviour_csv)
     train_frac = float(bm.get("train_frac", 0.7))
     val_frac = float(bm.get("val_frac", 0.15))
 
+    _log_phase("splitting data by voter")
     train_raw, val_raw, test_raw = split_by_voter_three_way(
         raw_df, train_frac=train_frac, val_frac=val_frac, seed=seed
     )
@@ -137,6 +146,7 @@ def main() -> None:
     )
     print(f"[08] Split manifest: {split_path}")
 
+    _log_phase("preparing train/val/test splits and fitting structural clusters")
     train_df, val_df, test_df, preprocessor, cluster_bundle, tr_a, va_a, te_a = prepare_behaviour_splits(
         raw_df,
         dao_feature_table_path=dao_feat,
@@ -150,6 +160,7 @@ def main() -> None:
         min_votes_per_pair=min_votes,
         cluster_artifacts_dir=cluster_dir,
     )
+    _log_phase("writing enriched behaviour CSV")
     write_enriched_behaviour_csv(tr_a, va_a, te_a, enriched_csv)
     print(f"[08] Enriched behaviour CSV (clusters): {enriched_csv}")
 
@@ -170,6 +181,7 @@ def main() -> None:
         print(f"[08] finite check OK: {name}")
 
     window_size = int(bm.get("window", 5))
+    _log_phase(f"building windows with size={window_size}")
     train_windows = build_windows(train_df, window_size=window_size, numeric_cols=num_cols)
     valid_windows = build_windows(val_df, window_size=window_size, numeric_cols=num_cols)
     if not train_windows or not valid_windows:
@@ -199,6 +211,7 @@ def main() -> None:
     if lr > warn_lr:
         print(f"[08] WARNING: learning rate {lr} exceeds recommended upper bound {warn_lr} for AdamW + transformers.")
 
+    _log_phase("initializing tokenizer and model")
     tokenizer = AutoTokenizer.from_pretrained(pretrained, use_fast=True)
     tokenizer.add_special_tokens({"additional_special_tokens": ["[PREDICT]", "[LABEL_0]", "[LABEL_1]", "[LABEL_2]"]})
 
@@ -221,6 +234,7 @@ def main() -> None:
     best_state = None
     train_lines = []
 
+    _log_phase(f"starting training for {epochs} epochs")
     for epoch in range(epochs):
         model.train()
         tr_true, tr_pred, tr_loss = [], [], 0.0
@@ -326,6 +340,7 @@ def main() -> None:
         ),
         encoding="utf-8",
     )
+    _log_phase("finished behaviour modelling run")
     print(f"[08] saved model to {out_dir}")
 
 

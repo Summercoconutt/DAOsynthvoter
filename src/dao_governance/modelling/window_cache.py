@@ -11,10 +11,8 @@ import pandas as pd
 
 from dao_governance.modelling.preprocess import normalise_columns, select_numeric_columns
 from dao_governance.modelling.windows import (
+    LABEL_DERIVED_AT_PREDICT_TIME,
     WINDOW_GROUP_COLS,
-    _eval_cluster_id,
-    _row_numeric_vec,
-    _time_feats,
 )
 
 
@@ -74,7 +72,8 @@ def _windows_from_voter_group(
     numeric_cols: List[str],
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     g = g.sort_values("vote_ts").reset_index(drop=True)
-    if len(g) < window_size:
+    n_rows = len(g)
+    if n_rows < window_size:
         return (
             np.empty((0, window_size, len(numeric_cols) + 4), dtype=np.float32),
             np.empty((0,), dtype=np.int64),
@@ -82,35 +81,45 @@ def _windows_from_voter_group(
             np.empty((0,), dtype=np.int64),
         )
 
-    feats_list: List[np.ndarray] = []
-    labels: List[int] = []
-    dao_cs: List[int] = []
-    voter_cs: List[int] = []
-
-    for t in range(window_size - 1, len(g)):
-        indices = list(range(t - window_size + 1, t + 1))
-        step_feats: List[np.ndarray] = []
-        for idx in indices:
-            row = g.loc[idx]
-            is_cur = idx == t
-            vec = _row_numeric_vec(row, numeric_cols, is_current_step=is_cur)
-            arr = np.asarray(vec, dtype=np.float32)
-            if not np.isfinite(arr).all():
-                raise ValueError(f"Non-finite feature vector for voter={row['voter']}")
-            step_feats.append(arr)
-
-        cur = g.loc[t]
-        feats_list.append(np.stack(step_feats, axis=0))
-        labels.append(int(cur["label_id"]))
-        dao_cs.append(_eval_cluster_id(cur, "dao_cluster"))
-        voter_cs.append(_eval_cluster_id(cur, "voter_cluster"))
-
-    return (
-        np.stack(feats_list, axis=0),
-        np.asarray(labels, dtype=np.int64),
-        np.asarray(dao_cs, dtype=np.int64),
-        np.asarray(voter_cs, dtype=np.int64),
+    numeric_data = np.column_stack(
+        [pd.to_numeric(g[c], errors="coerce").to_numpy(dtype=np.float32) for c in numeric_cols]
     )
+
+    ts = pd.to_datetime(g["vote_ts"], utc=True, errors="coerce")
+    time_data = np.column_stack(
+        [
+            (ts.dt.hour.fillna(0.0).to_numpy(dtype=np.float32) / np.float32(23.0)),
+            (ts.dt.weekday.fillna(0.0).to_numpy(dtype=np.float32) / np.float32(6.0)),
+            ((ts.dt.month.fillna(1.0).to_numpy(dtype=np.float32) - np.float32(1.0)) / np.float32(11.0)),
+            ((ts.dt.day.fillna(1.0).to_numpy(dtype=np.float32) - np.float32(1.0)) / np.float32(30.0)),
+        ]
+    )
+    base_feats = np.hstack([numeric_data, time_data]).astype(np.float32, copy=False)
+
+    if not np.isfinite(base_feats).all():
+        voter_id = str(g["voter"].iloc[0]) if not g.empty else "<unknown>"
+        raise ValueError(f"Non-finite feature vector for voter={voter_id}")
+
+    n_windows = n_rows - window_size + 1
+    feat_dim = base_feats.shape[1]
+    feats = np.empty((n_windows, window_size, feat_dim), dtype=np.float32)
+    for w_idx in range(n_windows):
+        feats[w_idx] = base_feats[w_idx : w_idx + window_size]
+
+    # Prevent target leakage for label-derived features at the prediction step.
+    leakage_cols = [
+        i for i, col in enumerate(numeric_cols) if col in LABEL_DERIVED_AT_PREDICT_TIME
+    ]
+    if leakage_cols:
+        feats[:, -1, leakage_cols] = 0.0
+
+    labels = pd.to_numeric(g["label_id"], errors="coerce").fillna(-1).to_numpy(dtype=np.int64)[window_size - 1 :]
+    dao_cs_all = pd.to_numeric(g.get("dao_cluster", -1), errors="coerce").fillna(-1).to_numpy(dtype=np.int64)
+    voter_cs_all = pd.to_numeric(g.get("voter_cluster", -1), errors="coerce").fillna(-1).to_numpy(dtype=np.int64)
+    dao_cs = dao_cs_all[window_size - 1 :]
+    voter_cs = voter_cs_all[window_size - 1 :]
+
+    return feats, labels, dao_cs, voter_cs
 
 
 def materialize_split_cache(
@@ -197,22 +206,24 @@ def materialize_split_cache(
 
         chunk["voter"] = chunk["voter"].astype(str)
         chunk["space"] = chunk["space"].astype(str)
-        group_keys = list(WINDOW_GROUP_COLS)
-        boundaries: List[Tuple[str, str]] = []
-        prev = None
-        for _, row in chunk.iterrows():
-            key = (row["voter"], row["space"])
-            if prev is not None and key != prev:
-                boundaries.append(prev)
-            prev = key
-        boundaries.append(prev)
 
-        for i, key in enumerate(boundaries[:-1]):
-            mask = (chunk["voter"] == key[0]) & (chunk["space"] == key[1])
-            _flush_group([chunk.loc[mask]])
+        key_change = (
+            chunk.loc[:, list(WINDOW_GROUP_COLS)]
+            .ne(chunk.loc[:, list(WINDOW_GROUP_COLS)].shift(1))
+            .any(axis=1)
+            .to_numpy()
+        )
+        starts = np.flatnonzero(key_change)
+        if starts.size == 0:
+            continue
 
-        last_key = boundaries[-1]
-        carry_over = chunk[(chunk["voter"] == last_key[0]) & (chunk["space"] == last_key[1])].copy()
+        starts = np.append(starts, len(chunk))
+        for i in range(len(starts) - 2):
+            s = int(starts[i])
+            e = int(starts[i + 1])
+            _flush_group([chunk.iloc[s:e]])
+
+        carry_over = chunk.iloc[int(starts[-2]) : int(starts[-1])].copy()
 
     if not carry_over.empty:
         _flush_group([carry_over])

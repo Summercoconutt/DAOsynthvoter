@@ -6,8 +6,21 @@ from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 
 from dao_governance.data.validation import DataQualityReport, behaviour_dataset_quality_report
+
+BEHAVIOUR_REQUIRED_COLUMNS = [
+    "voter",
+    "space",
+    "proposal_id",
+    "choice_norm",
+    "vote_timestamp",
+    "vote_ts",
+    "proposal_title",
+    "voting_power",
+    "is_whale",
+]
 
 LABEL_MAP = {"for": 0, "against": 1, "abstain": 2}
 
@@ -34,7 +47,11 @@ def build_behaviour_dataset(
     Cluster assignment is deferred to Stage 8 (train-only fit via causal_clusters).
     Set include_legacy_clusters=True only for deprecated / exploratory runs.
     """
-    votes = pd.read_parquet(master_votes_parquet)
+    available_columns = set(pq.ParquetFile(master_votes_parquet).schema.names)
+    parquet_columns = [c for c in BEHAVIOUR_REQUIRED_COLUMNS if c in available_columns]
+    if not parquet_columns:
+        raise ValueError(f"No supported behaviour columns found in parquet schema: {sorted(available_columns)}")
+    votes = pd.read_parquet(master_votes_parquet, columns=parquet_columns)
     df = votes.copy()
 
     if not include_legacy_clusters:

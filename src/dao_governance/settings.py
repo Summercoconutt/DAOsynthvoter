@@ -8,6 +8,8 @@ from typing import Any, Dict
 
 import yaml
 
+DEFAULT_DATA_SOURCES_CONFIG = "configs/data_sources.yaml"
+
 
 def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
     out = deepcopy(base)
@@ -30,6 +32,11 @@ def load_config(
         raise FileNotFoundError(f"Config not found: {path}")
     with open(path, encoding="utf-8") as f:
         cfg = yaml.safe_load(f) or {}
+
+    data_sources_path = root / DEFAULT_DATA_SOURCES_CONFIG
+    if not extra_path and data_sources_path.exists():
+        with open(data_sources_path, encoding="utf-8") as f:
+            cfg = _deep_merge(cfg, yaml.safe_load(f) or {})
 
     if extra_path and Path(extra_path).exists():
         with open(extra_path, encoding="utf-8") as f:
