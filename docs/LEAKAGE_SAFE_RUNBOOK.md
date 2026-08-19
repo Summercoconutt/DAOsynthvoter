@@ -30,7 +30,8 @@ python scripts/09_run_behaviour_evaluation.py --config configs/default.yaml --sp
 | Windows | Group by `voter` | Group by `(voter, space)` |
 | Clusters | Stage 6/7 global, label-heavy | **Train-only structural** fit in Stage 8 |
 | Stage 7 output | Fed behaviour model | **Exploratory / EDA only** |
-| `feat_dim` | 10 | **8** — retrain required |
+| Stage 08 `feat_dim` | 10 | **8** — retrain required |
+| Stage 08b `feat_dim` | N/A | **10** — six numeric/history plus four time features |
 
 ## Outputs
 
@@ -58,7 +59,7 @@ python -m pytest tests/test_leakage_safe_pipeline.py -v
 
 ## Large dataset (08b cache)
 
-Run 08 or 08b once to create split manifest + enriched CSV. Then:
+Run Stage 08 first to create the matching split manifest and enriched CSV. Stage 08b then fits its own causal-history preprocessor and cache. Then:
 
 ```powershell
 python scripts/08b_run_behaviour_modelling_no_roberta.py --config configs/default.yaml `

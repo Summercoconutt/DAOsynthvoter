@@ -57,6 +57,8 @@ python scripts/03_run_global_cleaning.py \
 
 Cleaned output is written only under this repo: `data/processed/votes_cleaned.parquet` (see `paths.cleaned_master_parquet` in `configs/default.yaml`).
 
+For the optional lean proposal experiment, enable `cleaning.lean_sample` in a separate override. Stage 03 writes `votes_cleaned_lean.parquet` and `proposal_lean_audit.csv` without replacing canonical cleaned votes. Point a separate downstream config at the lean parquet and report results only for that outcome-selected population.
+
 ### Stage 8 minimum prerequisites (Stages 5–7 not required)
 
 | File | Produced by | Purpose |
@@ -131,7 +133,7 @@ Outputs: `outputs/tables/eval/{test|val}/` (F1, ECE, confusion matrices, stratif
 python -m pytest tests/test_leakage_safe_pipeline.py -v
 ```
 
-Expected: **9 passed** (no GPU or real server data required).
+Expected: **20 passed** (no GPU or real server data required).
 
 ---
 
@@ -165,6 +167,7 @@ Key implementation files:
 | `outputs/processed/split_manifest.json` | Three-way voter split |
 | `outputs/models/predictive_clusters/cluster_bundle.pkl` | Cluster models (train-fit only) |
 | `outputs/models/behaviour_agent2/` | RoBERTa model + `config.json` (`feat_dim=8`) |
+| `outputs/behaviour_modelling/agent2_artifacts_no_roberta/` | Numeric-only ablation + `config.json` (`feat_dim=10`) |
 | `outputs/reports/stage08_behaviour_modelling.md` | Stage 8 summary |
 | `outputs/tables/eval/test/metrics_report.md` | Stage 9 test metrics |
 
@@ -176,6 +179,7 @@ Key implementation files:
 behaviour_model:
   use_dao_clusters: true    # set false for ablation
   use_voter_clusters: true
+  text_mode: title  # title | title_body
   group_windows_by: [voter, space]
 ```
 
@@ -192,7 +196,7 @@ python scripts/08b_run_behaviour_modelling_no_roberta.py --config configs/defaul
   --reuse-split-manifest --reuse-window-cache
 ```
 
-**Note:** After pulling leakage-fix code changes, delete `outputs/behaviour_modelling/window_cache_no_roberta/` to force a cache rebuild.
+**Note:** The 08b cache validates numeric columns and window size. Delete or rematerialize it after causal-history schema changes; the current cache has 10 features per step.
 
 ---
 

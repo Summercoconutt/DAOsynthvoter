@@ -13,6 +13,8 @@ Stage 08b depends on `carlo_dev` fixes (e.g. `_eval_cluster_id` in `windows.py`,
 
 This branch trains a **numeric-only** voter-choice model to compare against the existing **RoBERTa + numeric + clusters** model (stage `08`). It does **not** modify or retrain the RoBERTa pipeline.
 
+Stage 08 may use either title-only or title-plus-body text (`behaviour_model.text_mode`). Record that setting with comparison results: 08b intentionally receives no proposal text, while it receives causal prior FOR/AGAINST fractions to retain non-text vote-history information.
+
 ## Prerequisites (should already exist from stage 08)
 
 On the server, after the student’s RoBERTa run:
@@ -59,6 +61,8 @@ python scripts/08b_run_behaviour_modelling_no_roberta.py \
 4. Fits and saves an 08b-specific numeric preprocessor, then builds a **memmap window cache** under `outputs/behaviour_modelling/window_cache_no_roberta/` (one-time; ~6GB on disk).
 5. Trains `NumericOnlyTimeSeriesClassifier` for 4 epochs (`window=5`, `batch_size=16`, `numeric_only_lr=1e-3`).
 6. Writes comparison CSV vs RoBERTa.
+
+The 08b tensor has `feat_dim=10`: six numeric/history inputs plus four time encodings.
 
 ### If window cache is already built but training failed
 

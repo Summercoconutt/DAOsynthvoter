@@ -18,7 +18,7 @@ This document records **label leakage and split contamination** risks identified
 | **Fixed (High)** | Windows grouped by `(voter, space)` instead of `voter` alone |
 | **Mitigated (Medium)** | Label-derived columns zeroed at prediction step if present |
 | **Documented (Low)** | `is_whale` global threshold; DAO metrics use full history |
-| **Verified** | 9 automated pytest cases pass without GPU or server data |
+| **Verified** | 20 automated pytest cases pass without GPU or server data |
 
 **Bottom line:** Stage 8 metrics on held-out **voters** are now structurally defensible for thesis reporting, provided the server run follows `docs/SUPERVISOR_LEAKAGE_SAFE_GUIDE.md` and old `feat_dim=10` checkpoints are not reused.
 
@@ -205,7 +205,7 @@ This document records **label leakage and split contamination** risks identified
 └────────────────────────────┬────────────────────────────────────┘
                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│ build_windows(group_by=voter+space) → feat_dim=8                │
+│ Stage 08: build_windows(group_by=voter+space) → feat_dim=8     │
 │ Train TimeSeriesClassifier on TRAIN windows only                │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -255,7 +255,7 @@ python -m pytest tests/test_leakage_safe_pipeline.py -v
 | `TestClusterSafety` | Structural DAO features; train-only fit; label-invariant assign |
 | `TestWindowGrouping` | Separate sequences per `(voter, space)` |
 | `TestBehaviourDataset` | Legacy clusters / leaky cols stripped |
-| `TestIntegrationPrepareSplits` | Full pipeline produces finite `feat_dim=8` windows |
+| `TestIntegrationPrepareSplits` | Stage 08 produces finite `feat_dim=8` windows; Stage 08b produces finite `feat_dim=10` windows |
 
 ### 7.2 Manual (server)
 
@@ -289,7 +289,7 @@ python -m pytest tests/test_leakage_safe_pipeline.py -v
 |----------|---------|------------------------|
 | `feat_dim` | 10 | **8** |
 | `config.json` / `model.pt` | Old numeric layout | **Retrain required** |
-| Window cache (`08b`) | May contain leaky columns | Delete cache dir after upgrade |
+| Window cache (`08b`) | May contain stale feature schema | Cache metadata validates numeric columns and window size; rematerialize on mismatch |
 | Stage 7 assignments | Required input | **Optional EDA** |
 
 ---

@@ -15,18 +15,19 @@ All paths are **relative to this folder** (`whole_pipeline/`). Edit `configs/def
 | `scripts/09_run_behaviour_evaluation.py` | **Comprehensive evaluation** after stage 08 (test/val splits, calibration, cluster metrics). |
 | `scripts/10_run_detection_mode.py` | **Detection mode**: scan raw server data (read-only), verify behaviour inputs, optional smoke train. |
 | `docs/SUPERVISOR_LEAKAGE_SAFE_GUIDE.md` | **Leakage-safe Stage 8** — detailed supervisor runbook (`carlo_dev`). |
-| `docs/Feature_Specification.md` | Full feature catalogue, `feat_dim=8` layout, stage-by-stage taxonomy. |
+| `docs/Feature_Specification.md` | Full feature catalogue: Stage 08 `feat_dim=8`; Stage 08b `feat_dim=10`. |
 | `docs/Leakage_Audit.md` | Leakage issue register, fixes, severity matrix, verification checklist. |
 | `docs/LEAKAGE_SAFE_RUNBOOK.md` | Short English runbook for leakage-safe behaviour modelling. |
 | `configs/smoke_behaviour.yaml` | Tiny training budget for GPU smoke test (merged over default). |
 | `configs/example_server_raw.yaml` | Template pointing **absolute** raw parquet under `D:/111111/Data` into cleaning (does not write into Data). |
-| `run_full_pipeline.py` | Runs stages in order (`--from-stage` / `--to-stage`). |
+| `run_full_pipeline.py` | Runs stages 01–08 in order (`--from-stage` / `--to-stage`). |
+| `run_all.sh` | Runs stages 01–08, the 08b ablation, and Stage 09 evaluation in order. |
 | `src/dao_governance/` | Validation, behaviour dataset, modelling (copied from parent project). |
 | `src/dao_clustering_scripts/` | Snapshot merge + DAO metric tables (`01`–`03`). |
 | `src/feature_selection/` | DAO feature screening pipeline. |
 | `src/dao_clustering_validation/` | DAO clustering validation + exports (`cluster_assignments.csv`, etc.). |
 | `src/voter_clustering/` | Voter-space features + clustering. |
-| `src/behaviour_modelling/` | Legacy flat modules (some stages use `dao_governance` instead). |
+| `src/deprecated/behaviour_modelling/` | Pre-leakage-fix legacy modules, retained only for historical reference. |
 | `src/data_expansion/` | Expansion / eligible-base scripts (RPC/API — see script headers). |
 | `src/participation_rate/` | Participation metrics from Snapshot folders. |
 | `src/representative_voter/` | Representative-voter centroids per DAO. |
@@ -77,7 +78,7 @@ Outputs under `outputs/tables/eval/{test|val}/`:
 - `reliability_bins.csv`, `figures/reliability_*.png`
 - `metrics_by_dao_cluster.csv`, `metrics_by_voter_cluster.csv`
 
-Do **not** use legacy `src/behaviour_modelling/evaluate.py` for models trained by stage 08.
+Do **not** use code under `src/deprecated/behaviour_modelling/` for models trained by Stage 08.
 
 **Cleaning server exports without touching `Data/`:** set an absolute `paths.master_votes_parquet` in `configs/example_server_raw.yaml` (copy and edit), then:
 
@@ -110,6 +111,7 @@ Full pipeline (stops on first error):
 ```text
 python run_full_pipeline.py --config configs/default.yaml
 python run_full_pipeline.py --from-stage 4 --to-stage 8 --config configs/default.yaml
+./run_all.sh configs/default.yaml
 ```
 
 ## Assumptions & TODOs
