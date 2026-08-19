@@ -97,6 +97,15 @@ python scripts/04_run_dao_metrics.py --config configs/default.yaml
 python scripts/08_run_behaviour_modelling.py --config configs/default.yaml
 ```
 
+To append the existing proposal body to each title, merge an override containing:
+
+```yaml
+behaviour_model:
+  text_mode: title_body
+```
+
+`title_body` requires `proposal_body` (or legacy `Proposal Body`) in the master votes parquet. It uses `[TITLE]` and `[BODY]` markers, keeps the upstream 800-character body cap, and is still truncated by `behaviour_model.max_length`. Do not pass `--reuse-behaviour-csv` when changing this setting: Stage 08 requires a rebuilt CSV with matching text-mode metadata.
+
 **Numeric-only baseline (no RoBERTa, for comparison):**
 
 ```bash

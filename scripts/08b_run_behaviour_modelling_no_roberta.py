@@ -52,12 +52,14 @@ from dao_governance.modelling.model import NumericOnlyTimeSeriesClassifier
 from dao_governance.modelling.preprocess import (
     assert_finite_feature_columns,
     save_split_manifest,
-    select_numeric_columns,
+    select_numeric_columns_no_roberta,
     split_by_voter_three_way,
 )
 from dao_governance.modelling.window_cache import load_window_cache_meta, materialize_window_cache
 from dao_governance.modelling.windows import build_windows
 from dao_governance.settings import load_config, project_root
+
+NUMERIC_COLUMNS = select_numeric_columns_no_roberta()
 
 
 def compute_class_weights(y: np.ndarray, num_classes: int = 3) -> torch.Tensor:
@@ -172,6 +174,11 @@ def _load_preprocessor_from_config(path: Path) -> Dict[str, Any]:
     return pre
 
 
+def _preprocessor_has_history_features(preprocessor: Dict[str, Any]) -> bool:
+    extra = preprocessor.get("extra_robust") or {}
+    return all(col in extra for col in ("prior_frac_for", "prior_frac_against"))
+
+
 def _assert_csv_schema(csv_path: Path, required: list[str]) -> None:
     cols = [str(c).strip() for c in pd.read_csv(csv_path, nrows=0).columns.tolist()]
     lower_cols = [c.lower() for c in cols]
@@ -196,6 +203,11 @@ def _assert_csv_schema(csv_path: Path, required: list[str]) -> None:
         )
 
 
+def _csv_has_columns(csv_path: Path, required: list[str]) -> bool:
+    cols = {str(c).strip().lower() for c in pd.read_csv(csv_path, nrows=0).columns}
+    return all(c.lower() in cols for c in required)
+
+
 def _prepare_from_cache(
     *,
     behaviour_csv: Path,
@@ -204,11 +216,17 @@ def _prepare_from_cache(
     window_size: int,
     reuse_cache: bool,
     preprocessor: Dict[str, Any],
+    numeric_cols: List[str],
 ) -> tuple[MemmapNumericWindowDataset, MemmapNumericWindowDataset, Dict[str, Any]]:
     meta_path = cache_dir / "meta.json"
     if reuse_cache and meta_path.exists():
         print("[08b] Reusing window cache:", cache_dir)
         meta = load_window_cache_meta(cache_dir)
+        if meta.get("numeric_columns") != numeric_cols or meta.get("window_size") != window_size:
+            raise RuntimeError(
+                "[08b] Window cache schema does not match this run. "
+                "Delete the cache directory or rerun without --reuse-window-cache."
+            )
     else:
         print("[08b] Materializing window cache (this may take a while)...")
         meta = materialize_window_cache(
@@ -217,6 +235,7 @@ def _prepare_from_cache(
             cache_dir=cache_dir,
             preprocessor=preprocessor,
             window_size=window_size,
+            numeric_cols=numeric_cols,
         )
     train_ds = MemmapNumericWindowDataset(meta["splits"]["train"])
     valid_ds = MemmapNumericWindowDataset(meta["splits"]["val"])
@@ -351,6 +370,7 @@ def main() -> None:
             pre_path = (base / pre_path).resolve()
     else:
         for candidate in (
+            base / "outputs/behaviour_modelling/agent2_artifacts_no_roberta/config.json",
             base / "outputs/models/behaviour_agent2/config.json",
             base / "outputs/behaviour_modelling/agent2_artifacts/config.json",
         ):
@@ -378,9 +398,19 @@ def main() -> None:
             )
             print(f"[08b] Created split manifest: {split_path}")
 
-        need_prepare = not enriched_csv.exists() or not pre_path.exists()
+        has_history_features = enriched_csv.exists() and _csv_has_columns(
+            enriched_csv, ["prior_frac_for", "prior_frac_against"]
+        )
+        existing_preprocessor = (
+            _load_preprocessor_from_config(pre_path) if pre_path.exists() else None
+        )
+        need_prepare = (
+            not has_history_features
+            or existing_preprocessor is None
+            or not _preprocessor_has_history_features(existing_preprocessor)
+        )
         if need_prepare:
-            _log_phase("building enriched CSV + preprocessor (train-only clusters)")
+            _log_phase("building enriched CSV + preprocessor with causal prior-vote fractions")
             if raw_df is None:
                 _log_phase("loading behaviour dataset")
                 raw_df = load_behaviour_votes(behaviour_csv)
@@ -396,22 +426,26 @@ def main() -> None:
                 use_voter_clusters=use_voter,
                 min_votes_per_pair=min_votes,
                 cluster_artifacts_dir=cluster_dir,
+                include_prior_vote_fractions=True,
             )
             write_enriched_behaviour_csv(tr_a, va_a, te_a, enriched_csv)
         elif pre_path.exists():
-            preprocessor = _load_preprocessor_from_config(pre_path)
+            preprocessor = existing_preprocessor
             print(f"[08b] Loaded preprocessor from {pre_path}")
 
         if preprocessor is None:
             raise RuntimeError("[08b] Preprocessor not available after cache prep.")
 
         cache_csv = enriched_csv
-        _assert_csv_schema(cache_csv, required=["voter", "space", "vote_ts", "label_id"])
+        _assert_csv_schema(
+            cache_csv,
+            required=["voter", "space", "vote_ts", "label_id", "prior_frac_for", "prior_frac_against"],
+        )
         print(f"[08b] Large-dataset mode (CSV {cache_csv.stat().st_size / 1e9:.1f} GB), split manifest: {split_path}")
         prep_report.write_text(
             "# Preprocessing report (No-RoBERTa)\n\n"
             f"- Leakage-safe cache CSV: `{cache_csv}`\n"
-            f"- Model numeric columns: **{select_numeric_columns()}**\n",
+            f"- Model numeric columns: **{NUMERIC_COLUMNS}**\n",
             encoding="utf-8",
         )
         _log_phase("materializing window cache")
@@ -422,6 +456,7 @@ def main() -> None:
             window_size=window_size,
             reuse_cache=args.reuse_window_cache,
             preprocessor=preprocessor,
+            numeric_cols=NUMERIC_COLUMNS,
         )
         feat_dim = int(train_ds.feat_dim)
         train_labels = np.asarray(train_ds.labels)
@@ -457,6 +492,7 @@ def main() -> None:
             use_voter_clusters=use_voter,
             min_votes_per_pair=min_votes,
             cluster_artifacts_dir=cluster_dir,
+            include_prior_vote_fractions=True,
         )
         write_enriched_behaviour_csv(tr_a, va_a, te_a, enriched_csv)
 
@@ -464,12 +500,12 @@ def main() -> None:
             "# Preprocessing report (No-RoBERTa)\n\n"
             f"- Leakage-safe: **train-only structural clusters**\n"
             f"- Voting power cap (quantile {upper_q}): **{preprocessor['voting_power']['cap_value']}**\n"
-            f"- Model numeric columns: **{select_numeric_columns()}**\n"
+            f"- Model numeric columns: **{NUMERIC_COLUMNS}**\n"
             f"- Cluster meta: **{cluster_bundle.meta}**\n",
             encoding="utf-8",
         )
 
-        num_cols = select_numeric_columns()
+        num_cols = NUMERIC_COLUMNS
         for name, dfx in [("train", train_df), ("val", val_df), ("test", test_df)]:
             assert_finite_feature_columns(dfx, num_cols)
             print(f"[08b] finite check OK: {name}")
@@ -618,7 +654,7 @@ def main() -> None:
         "lr": lr,
         "window_cache_dir": str(cache_dir) if use_cache else "",
         "leakage_safe": True,
-        "numeric_columns": select_numeric_columns(),
+        "numeric_columns": NUMERIC_COLUMNS,
         "cluster_artifacts_dir": str(cluster_dir),
     }
     config_path = out_dir / "config.json"

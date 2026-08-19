@@ -5,6 +5,7 @@
 
 behaviour_model:
   pretrained: "distilroberta-base"
+  text_mode: "title"
   window: 3
   max_length: 96
   batch_size: 4

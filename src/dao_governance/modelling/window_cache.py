@@ -9,7 +9,7 @@ import duckdb
 import numpy as np
 import pandas as pd
 
-from dao_governance.modelling.preprocess import normalise_columns, select_numeric_columns
+from dao_governance.modelling.preprocess import normalise_columns
 from dao_governance.modelling.windows import (
     LABEL_DERIVED_AT_PREDICT_TIME,
     WINDOW_GROUP_COLS,
@@ -27,6 +27,8 @@ SLIM_COLUMNS = [
     "is_whale",
     "dao_cluster",
     "voter_cluster",
+    "prior_frac_for",
+    "prior_frac_against",
 ]
 
 SLIM_SELECT = """
@@ -37,7 +39,9 @@ SLIM_SELECT = """
     voting_power AS voting_power,
     is_whale AS is_whale,
     dao_cluster AS dao_cluster,
-    voter_cluster AS voter_cluster
+    voter_cluster AS voter_cluster,
+    prior_frac_for AS prior_frac_for,
+    prior_frac_against AS prior_frac_against
 """
 
 
@@ -130,11 +134,11 @@ def materialize_split_cache(
     cache_dir: Path,
     preprocessor: Dict[str, Any],
     window_size: int,
+    numeric_cols: List[str],
     con: duckdb.DuckDBPyConnection,
     chunk_rows: int = 200_000,
 ) -> Dict[str, Any]:
     cache_dir.mkdir(parents=True, exist_ok=True)
-    numeric_cols = select_numeric_columns()
     feat_dim = len(numeric_cols) + 4
 
     voters_table = f"voters_{split_name}"
@@ -257,6 +261,7 @@ def materialize_window_cache(
     cache_dir: Path,
     preprocessor: Dict[str, Any],
     window_size: int,
+    numeric_cols: List[str],
     splits: Tuple[str, ...] = ("train", "val"),
 ) -> Dict[str, Any]:
     manifest = json.loads(split_manifest_path.read_text(encoding="utf-8"))
@@ -273,6 +278,7 @@ def materialize_window_cache(
             cache_dir=cache_dir,
             preprocessor=preprocessor,
             window_size=window_size,
+            numeric_cols=numeric_cols,
             con=con,
         )
 
@@ -281,6 +287,7 @@ def materialize_window_cache(
         "csv_path": str(csv_path.resolve()),
         "split_manifest": str(split_manifest_path.resolve()),
         "window_size": window_size,
+        "numeric_columns": numeric_cols,
         "splits": split_meta,
     }
     meta_path = cache_dir / "meta.json"

@@ -32,6 +32,7 @@ def _standardize_vote_columns(df: pd.DataFrame) -> pd.DataFrame:
         "Space": "space",
         "Proposal ID": "proposal_id",
         "Proposal Title": "proposal_title",
+        "Proposal Body": "proposal_body",
         "Voter": "voter",
         "Choice": "choice",
         "Voting Power": "voting_power",

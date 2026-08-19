@@ -26,6 +26,7 @@ def fit_numeric_preprocessor(
     *,
     upper_quantile_cap: float = 0.999,
     absolute_cap: float = 1e18,
+    include_prior_vote_fractions: bool = False,
 ) -> Dict[str, Any]:
     """
     Fit robust preprocessing on training split only.
@@ -72,6 +73,14 @@ def fit_numeric_preprocessor(
         sc = _safe_iqr(s)
         extra[col] = {"center": med, "scale": max(sc, 1e-8)}
 
+    if include_prior_vote_fractions:
+        for col in ("prior_frac_for", "prior_frac_against"):
+            s = _numeric_series(df, col, default=0.0).replace([np.inf, -np.inf], np.nan)
+            s = s.fillna(0.0).clip(lower=0.0, upper=1.0)
+            if float(s.std(ddof=0) or 0.0) < 1e-12:
+                zero_var_cols.append(col)
+            extra[col] = {"center": float(s.median()), "scale": max(_safe_iqr(s), 1e-8)}
+
     return {
         "voting_power": {
             "median_raw_nonneg": vp_med,
@@ -115,9 +124,12 @@ def normalise_columns(df: pd.DataFrame, preprocessor: Dict[str, Any]) -> pd.Data
     out["is_whale"] = _to_bool_series(out.get("is_whale", False))
 
     ex = preprocessor.get("extra_robust") or {}
-    for col in ("dao_cluster", "voter_cluster"):
+    for col in ("dao_cluster", "voter_cluster", "prior_frac_for", "prior_frac_against"):
         if col in out.columns and col in ex:
-            s = pd.to_numeric(out[col], errors="coerce").fillna(-1.0)
+            default = 0.0 if col.startswith("prior_frac_") else -1.0
+            s = pd.to_numeric(out[col], errors="coerce").fillna(default)
+            if col.startswith("prior_frac_"):
+                s = s.clip(lower=0.0, upper=1.0)
             cfg = ex[col]
             out[col] = ((s - float(cfg["center"])) / float(cfg["scale"])).astype(float)
 
@@ -142,6 +154,11 @@ def _to_bool_series(col: pd.Series) -> pd.Series:
 def select_numeric_columns() -> List[str]:
     """Leakage-safe model inputs (no label-derived or unverified post-hoc fields)."""
     return ["voting_power", "is_whale", "dao_cluster", "voter_cluster"]
+
+
+def select_numeric_columns_no_roberta() -> List[str]:
+    """Stage 08b inputs, including causal historical-choice fractions."""
+    return select_numeric_columns() + ["prior_frac_for", "prior_frac_against"]
 
 
 def load_dataset(csv_path: Path) -> pd.DataFrame:

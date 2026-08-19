@@ -21,6 +21,30 @@ from dao_governance.modelling.preprocess import (
 )
 
 
+def add_prior_vote_fractions(df: pd.DataFrame) -> pd.DataFrame:
+    """Add causal FOR and AGAINST fractions from earlier votes per voter-space."""
+    out = df.copy()
+    out["prior_frac_for"] = 0.0
+    out["prior_frac_against"] = 0.0
+    out["_source_order"] = range(len(out))
+
+    sort_cols = ["vote_ts"]
+    if "proposal_id" in out.columns:
+        sort_cols.append("proposal_id")
+    sort_cols.append("_source_order")
+
+    for _, group in out.groupby(["voter", "space"], sort=False):
+        ordered = group.sort_values(sort_cols, kind="mergesort")
+        prior_count = pd.Series(range(len(ordered)), index=ordered.index, dtype=float)
+        prior_for = (ordered["label_id"] == 0).cumsum().shift(fill_value=0)
+        prior_against = (ordered["label_id"] == 1).cumsum().shift(fill_value=0)
+        denominator = prior_count.where(prior_count > 0, 1.0)
+        out.loc[ordered.index, "prior_frac_for"] = (prior_for / denominator).to_numpy()
+        out.loc[ordered.index, "prior_frac_against"] = (prior_against / denominator).to_numpy()
+
+    return out.drop(columns="_source_order")
+
+
 def prepare_behaviour_splits(
     raw_df: pd.DataFrame,
     *,
@@ -34,21 +58,31 @@ def prepare_behaviour_splits(
     use_voter_clusters: bool = True,
     min_votes_per_pair: int = 5,
     cluster_artifacts_dir: Path | None = None,
+    include_prior_vote_fractions: bool = False,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, Dict[str, Any], ClusterBundle, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Leakage-safe pipeline:
       1. voter split (before any cluster fit)
-      2. fit numeric preprocessor on train
-      3. fit structural clusters on train only
-      4. assign clusters to all splits (transform only)
-      5. normalise numeric columns
+    2. optionally add causal prior-vote fractions within each split
+    3. fit numeric preprocessor on train
+    4. fit structural clusters on train only
+    5. assign clusters to all splits (transform only)
+    6. normalise numeric columns
     """
     train_raw, val_raw, test_raw = split_by_voter_three_way(
         raw_df, train_frac=train_frac, val_frac=val_frac, seed=seed
     )
 
+    if include_prior_vote_fractions:
+        train_raw = add_prior_vote_fractions(train_raw)
+        val_raw = add_prior_vote_fractions(val_raw)
+        test_raw = add_prior_vote_fractions(test_raw)
+
     preprocessor = fit_numeric_preprocessor(
-        train_raw, upper_quantile_cap=upper_quantile_cap, absolute_cap=absolute_cap
+        train_raw,
+        upper_quantile_cap=upper_quantile_cap,
+        absolute_cap=absolute_cap,
+        include_prior_vote_fractions=include_prior_vote_fractions,
     )
 
     bundle = fit_cluster_bundle(

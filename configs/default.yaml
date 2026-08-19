@@ -97,6 +97,7 @@ behaviour_model:
     - voter
     - space
   pretrained: "distilroberta-base"
+  text_mode: "title"  # title | title_body
   window: 5
   max_length: 128
   batch_size: 16

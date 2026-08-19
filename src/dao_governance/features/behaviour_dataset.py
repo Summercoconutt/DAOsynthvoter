@@ -18,11 +18,14 @@ BEHAVIOUR_REQUIRED_COLUMNS = [
     "vote_timestamp",
     "vote_ts",
     "proposal_title",
+    "proposal_body",
+    "Proposal Body",
     "voting_power",
     "is_whale",
 ]
 
 LABEL_MAP = {"for": 0, "against": 1, "abstain": 2}
+TEXT_MODES = frozenset({"title", "title_body"})
 
 
 def _normalise_bool(col: pd.Series) -> pd.Series:
@@ -34,12 +37,30 @@ def _normalise_bool(col: pd.Series) -> pd.Series:
     return col.apply(to_bool)
 
 
+def _text_series(df: pd.DataFrame, text_mode: str) -> pd.Series:
+    if text_mode not in TEXT_MODES:
+        raise ValueError(f"Unsupported text_mode={text_mode!r}; expected one of {sorted(TEXT_MODES)}")
+
+    title = df.get("proposal_title", pd.Series("", index=df.index)).fillna("").astype(str)
+    if text_mode == "title":
+        return title
+
+    body_col = "proposal_body" if "proposal_body" in df.columns else "Proposal Body"
+    if body_col not in df.columns:
+        raise ValueError(
+            "text_mode='title_body' requires 'proposal_body' or 'Proposal Body' in the master votes parquet."
+        )
+    body = df[body_col].fillna("").astype(str)
+    return "[TITLE] " + title + " [BODY] " + body
+
+
 def build_behaviour_dataset(
     master_votes_parquet: Path,
     voter_cluster_assignments_csv: Optional[Path] = None,
     output_csv: Optional[Path] = None,
     *,
     include_legacy_clusters: bool = False,
+    text_mode: str = "title",
 ) -> Tuple[pd.DataFrame, DataQualityReport]:
     """
     Vote-level behaviour table without cluster IDs.
@@ -84,7 +105,7 @@ def build_behaviour_dataset(
         utc=True,
         errors="coerce",
     )
-    df["text"] = df.get("proposal_title", "").fillna("").astype(str)
+    df["text"] = _text_series(df, text_mode)
     df["voting_power"] = pd.to_numeric(df.get("voting_power", np.nan), errors="coerce")
     df["is_whale"] = _normalise_bool(df.get("is_whale", False))
 
@@ -95,6 +116,7 @@ def build_behaviour_dataset(
     report.stats.notes.append(
         "Clusters not merged at build time; Stage 8 fits train-only structural clusters."
     )
+    report.stats.notes.append(f"Text mode: {text_mode}")
 
     if output_csv is not None:
         output_csv.parent.mkdir(parents=True, exist_ok=True)
@@ -109,12 +131,14 @@ def write_behaviour_dataset_with_report(
     report_md_path: Optional[Path] = None,
     *,
     include_legacy_clusters: bool = False,
+    text_mode: str = "title",
 ) -> pd.DataFrame:
     df, rep = build_behaviour_dataset(
         master_parquet,
         assignments_csv,
         output_csv=output_csv,
         include_legacy_clusters=include_legacy_clusters,
+        text_mode=text_mode,
     )
     if report_md_path is not None:
         report_md_path.parent.mkdir(parents=True, exist_ok=True)

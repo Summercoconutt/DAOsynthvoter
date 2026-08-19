@@ -13,7 +13,7 @@
 | **A. Vote-level numeric (preprocessed)** | Yes | Preprocessor fit on **train voters only** | `voting_power`, `is_whale` |
 | **B. Cluster IDs (numeric)** | Yes (optional ablation) | KMeans fit on **train voters only** | `dao_cluster`, `voter_cluster` |
 | **C. Time encodings** | Yes | Per-row, no fit | 4 dims appended per window step |
-| **D. Text (proposal title)** | Yes (08 only; not 08b) | RoBERTa pretrained | History steps prefixed `[LABEL_k]`; current step `[PREDICT]` |
+| **D. Text (proposal title; optional body)** | Yes (08 only; not 08b) | RoBERTa pretrained | `text_mode: title_body` appends the available body; history steps prefixed `[LABEL_k]`; current step `[PREDICT]` |
 | **E. Structural DAO table features** | Indirect | Stage 4 full history; Stage 8 cluster fit on train spaces | See §4 |
 | **F. Structural voter-pair features** | Indirect | Computed from train votes for cluster fit | See §5 |
 | **G. Label-derived / exploratory** | **No** | Stage 6/7 EDA only | `z_rep_*`, `pct_*`, `aligned_with_majority` |
@@ -69,12 +69,19 @@ Source column: `vote_ts` (UTC). Missing timestamps → all zeros.
 
 | Field | Source | Window encoding |
 |-------|--------|-----------------|
-| `text` | `proposal_title` from behaviour dataset | History: `"[LABEL_{0|1|2}] " + text`; current: `"[PREDICT] " + text` |
+| `text` (`text_mode: title`) | `proposal_title` from behaviour dataset | History: `"[LABEL_{0|1|2}] " + text`; current: `"[PREDICT] " + text` |
+| `text` (`text_mode: title_body`) | `proposal_title` plus `proposal_body` / `Proposal Body` | `"[TITLE] " + title + " [BODY] " + body`, then the history/current prefix |
 
 Tokenizer: `distilroberta-base` (configurable via `behaviour_model.pretrained`).  
 Stage **08b** (`NumericOnlyTimeSeriesClassifier`) uses **numeric + time only** — no text.
 
-### 2.5 Target (not an input)
+`text_mode` defaults to `title`. `title_body` requires the body column in the master votes parquet. The current expansion caps body text at 800 characters, and RoBERTa still applies `behaviour_model.max_length` token truncation. Switching modes requires rebuilding `behaviour_dataset.csv`; Stage 08 records the selected mode in its adjacent CSV metadata and in the model configuration.
+
+### 2.5 Stage 08b causal history features
+
+Stage 08b additionally uses `prior_frac_for` and `prior_frac_against`, producing `feat_dim = 10` (six numeric features plus four time features). For each row, both fractions are calculated from earlier valid votes by the same `(voter, space)` pair; all prior votes, including `ABSTAIN`, are included in the denominator. The current vote is excluded. Stage 08 remains at `feat_dim = 8` and does not receive these two fields.
+
+### 2.6 Target (not an input)
 
 | Column | Values | Mapping |
 |--------|--------|---------|
@@ -153,6 +160,7 @@ Built by `build_behaviour_dataset()` — **no cluster merge by default**.
 | `choice_norm` | Yes | Yes |
 | `vote_ts` / `vote_timestamp` | Yes | Yes (`vote_ts` normalised) |
 | `proposal_title` → `text` | Yes | Yes |
+| `proposal_body` / `Proposal Body` | Only `text_mode: title_body` | Appended to text with `[BODY]`; Stage 03 canonicalizes raw `Proposal Body` to `proposal_body` |
 | `voting_power` | Yes | Yes |
 | `is_whale` | Yes | Yes |
 | `label_id` | Yes (derived) | Yes |

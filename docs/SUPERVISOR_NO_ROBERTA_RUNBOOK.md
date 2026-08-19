@@ -24,7 +24,7 @@ On the server, after the student’s RoBERTa run:
 | RoBERTa model + config | `outputs/models/behaviour_agent2/` |
 | RoBERTa training report | `outputs/tables/training_report.md` |
 
-The No-RoBERTa script **reuses the same split** and **the same numeric preprocessor** as RoBERTa so the comparison is fair.
+The No-RoBERTa script reuses the same voter split. It fits its own preprocessor once because it adds two causal historical-choice features that Stage 08 does not use.
 
 ## Environment
 
@@ -48,16 +48,15 @@ export PYTHONPATH=src
 python scripts/08b_run_behaviour_modelling_no_roberta.py \
   --config configs/default.yaml \
   --reuse-behaviour-csv \
-  --reuse-split-manifest \
-  --reuse-preprocessor-from outputs/models/behaviour_agent2/config.json
+  --reuse-split-manifest
 ```
 
 **What this does**
 
 1. Skips rebuilding `behaviour_dataset.csv` if it already exists.
 2. Uses existing `split_manifest.json` (does not reload the full 47GB CSV into RAM).
-3. Loads `numeric_preprocessor` from the RoBERTa `config.json`.
-4. Builds a **memmap window cache** under `outputs/behaviour_modelling/window_cache_no_roberta/` (one-time; ~6GB on disk).
+3. Builds causal `prior_frac_for` and `prior_frac_against` inputs from earlier votes in the same `(voter, space)` sequence; abstentions remain in the denominator.
+4. Fits and saves an 08b-specific numeric preprocessor, then builds a **memmap window cache** under `outputs/behaviour_modelling/window_cache_no_roberta/` (one-time; ~6GB on disk).
 5. Trains `NumericOnlyTimeSeriesClassifier` for 4 epochs (`window=5`, `batch_size=16`, `numeric_only_lr=1e-3`).
 6. Writes comparison CSV vs RoBERTa.
 
@@ -70,6 +69,8 @@ python scripts/08b_run_behaviour_modelling_no_roberta.py \
   --reuse-split-manifest \
   --reuse-window-cache
 ```
+
+The cache stores its numeric-column schema and window size. Delete or rematerialize `outputs/behaviour_modelling/window_cache_no_roberta/` after this upgrade; older caches have eight features per step, while the updated 08b cache has ten.
 
 ### Quick smoke test (small subset)
 

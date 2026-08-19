@@ -70,6 +70,29 @@ def _log_phase(message: str) -> None:
     print(f"[08] {message}")
 
 
+def _behaviour_csv_meta_path(behaviour_csv: Path) -> Path:
+    return behaviour_csv.with_suffix(".meta.json")
+
+
+def _write_behaviour_csv_meta(path: Path, *, text_mode: str) -> None:
+    path.write_text(json.dumps({"text_mode": text_mode}, indent=2), encoding="utf-8")
+
+
+def _assert_reusable_behaviour_csv(behaviour_csv: Path, *, text_mode: str) -> None:
+    meta_path = _behaviour_csv_meta_path(behaviour_csv)
+    if not meta_path.exists():
+        raise RuntimeError(
+            f"Cannot reuse {behaviour_csv}: missing text-mode metadata {meta_path}. "
+            "Rebuild without --reuse-behaviour-csv."
+        )
+    saved_mode = json.loads(meta_path.read_text(encoding="utf-8")).get("text_mode")
+    if saved_mode != text_mode:
+        raise RuntimeError(
+            f"Cannot reuse {behaviour_csv}: saved text_mode={saved_mode!r}, requested={text_mode!r}. "
+            "Rebuild without --reuse-behaviour-csv."
+        )
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", type=str, default="configs/default.yaml")
@@ -113,6 +136,9 @@ def main() -> None:
 
     use_dao = bool(bm.get("use_dao_clusters", True))
     use_voter = bool(bm.get("use_voter_clusters", True))
+    text_mode = str(bm.get("text_mode", "title"))
+    if text_mode not in {"title", "title_body"}:
+        raise ValueError("behaviour_model.text_mode must be 'title' or 'title_body'.")
     min_votes = int(vc.get("min_votes_per_voter_space", 5))
 
     for d in (behaviour_csv.parent, out_dir, logs_dir, split_path.parent, prep_report.parent, cluster_dir):
@@ -120,10 +146,14 @@ def main() -> None:
 
     if not args.reuse_behaviour_csv or not behaviour_csv.exists():
         _log_phase("building behaviour dataset CSV")
-        _, rep_b = build_behaviour_dataset(master_parquet, output_csv=behaviour_csv)
+        _, rep_b = build_behaviour_dataset(
+            master_parquet, output_csv=behaviour_csv, text_mode=text_mode
+        )
+        _write_behaviour_csv_meta(_behaviour_csv_meta_path(behaviour_csv), text_mode=text_mode)
         br_path = prep_report.parent / "behaviour_dataset_quality.md"
         br_path.write_text(rep_b.to_markdown("Behaviour dataset (build)"), encoding="utf-8")
     else:
+        _assert_reusable_behaviour_csv(behaviour_csv, text_mode=text_mode)
         print("[08] Reusing existing behaviour CSV:", behaviour_csv)
 
     _log_phase("loading behaviour dataset")
@@ -170,6 +200,7 @@ def main() -> None:
         f"- Voting power cap (quantile {dq.get('upper_quantile_cap', 0.999)}): **{preprocessor['voting_power']['cap_value']}**\n"
         f"- Transform: **{preprocessor['voting_power'].get('transform', 'clip_then_log1p_robust')}**\n"
         f"- Model numeric columns: **{select_numeric_columns()}**\n"
+        f"- Text mode: **{text_mode}**\n"
         f"- Cluster meta: **{cluster_bundle.meta}**\n"
         f"- Notes: {preprocessor.get('meta', {}).get('notes', [])}\n",
         encoding="utf-8",
@@ -213,7 +244,10 @@ def main() -> None:
 
     _log_phase("initializing tokenizer and model")
     tokenizer = AutoTokenizer.from_pretrained(pretrained, use_fast=True)
-    tokenizer.add_special_tokens({"additional_special_tokens": ["[PREDICT]", "[LABEL_0]", "[LABEL_1]", "[LABEL_2]"]})
+    special_tokens = ["[PREDICT]", "[LABEL_0]", "[LABEL_1]", "[LABEL_2]"]
+    if text_mode == "title_body":
+        special_tokens.extend(["[TITLE]", "[BODY]"])
+    tokenizer.add_special_tokens({"additional_special_tokens": special_tokens})
 
     train_ds = WindowDataset(train_windows, tokenizer, max_length)
     valid_ds = WindowDataset(valid_windows, tokenizer, max_length)
@@ -298,6 +332,7 @@ def main() -> None:
 
     train_cfg = {
         "pretrained": pretrained,
+        "text_mode": text_mode,
         "window": window_size,
         "max_length": max_length,
         "feat_dim": int(feat_dim),
@@ -333,6 +368,7 @@ def main() -> None:
                 f"- Model dir: `{out_dir}`",
                 f"- Cluster artifacts: `{cluster_dir}`",
                 f"- Enriched CSV (cache): `{enriched_csv}`",
+                f"- Text mode: `{text_mode}`",
                 f"- Training report: `{train_report}`",
                 f"- Preprocessing report: `{prep_report}`",
                 "",

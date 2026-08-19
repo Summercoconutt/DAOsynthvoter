@@ -25,3 +25,7 @@ data/**/*.csv
 .ipynb_checkpoints/
 .DS_Store
 Thumbs.db
+outputs_tables_eval.zip
+outputs_tables_validation.zip
+outputs.zip
+configs/data_sources.yaml
