@@ -15,7 +15,9 @@ paths:
 
   # --- Global cleaning outputs (never overwrite raw inputs; write new files) ---
   cleaned_master_parquet: "data/processed/votes_cleaned.parquet"
+  cleaned_master_lean_parquet: "data/processed/votes_cleaned_lean.parquet"
   cleaned_proposals_parquet: "data/processed/proposals_cleaned.parquet"
+  lean_proposal_audit_csv: "data/processed/proposal_lean_audit.csv"
 
   # --- DAO metrics (stage 4) ---
   dao_metrics_parquet: "data/interim/dao_metrics.parquet"
@@ -82,6 +84,13 @@ cleaning:
   negative_voting_power_policy: drop
   extreme_vp_quantile: 0.999
   flag_extreme_voting_power: true
+  # Experimental outcome-selected sample; canonical cleaned votes remain unchanged.
+  lean_sample:
+    enabled: false
+    max_for_fraction: 0.90
+    max_against_fraction: 0.90
+    min_title_chars: 10
+    min_body_chars: 50
 
 clustering:
   corr_threshold_feature_selection: 0.85

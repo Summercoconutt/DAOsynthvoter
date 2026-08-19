@@ -30,7 +30,8 @@ from dao_governance.features.causal_clusters import (
 )
 from dao_governance.modelling.preprocess import select_numeric_columns, select_numeric_columns_no_roberta
 from dao_governance.modelling.windows import WINDOW_GROUP_COLS, build_windows
-from pipeline.global_cleaning import _standardize_vote_columns
+from dao_governance.data.proposal_sampling import build_lean_proposal_sample
+from pipeline.global_cleaning import _standardize_vote_columns, run_global_cleaning_stage
 
 DAO_FIXTURE = ROOT / "src" / "dao_clustering_scripts" / "data" / "processed" / "dao_feature_table.csv"
 SPACES = ["ens.eth", "uniswapgovernance.eth"]
@@ -144,6 +145,105 @@ class TestPriorVoteFractions:
         pd.testing.assert_series_equal(
             before.loc[:1, "prior_frac_against"], after.loc[:1, "prior_frac_against"]
         )
+
+
+class TestLeanProposalSample:
+    def test_excludes_consensus_and_short_text_using_abstain_denominator(self):
+        votes = pd.DataFrame(
+            [
+                {"space": "a.eth", "proposal_id": "for90", "choice_norm": choice, "proposal_title": "Long enough title", "proposal_body": "Long enough proposal body text"}
+                for choice in ["for"] * 9 + ["abstain"]
+            ]
+            + [
+                {"space": "a.eth", "proposal_id": "mixed", "choice_norm": choice, "proposal_title": "Long enough title", "proposal_body": "Long enough proposal body text"}
+                for choice in ["for"] * 8 + ["against", "abstain"]
+            ]
+            + [
+                {"space": "a.eth", "proposal_id": "short", "choice_norm": "against", "proposal_title": "short", "proposal_body": "tiny"}
+            ]
+        )
+        lean, audit = build_lean_proposal_sample(
+            votes,
+            max_for_fraction=0.90,
+            max_against_fraction=0.90,
+            min_title_chars=10,
+            min_body_chars=10,
+        )
+
+        assert audit.loc[audit["proposal_id"] == "for90", "for_fraction"].item() == 0.9
+        assert not audit.loc[audit["proposal_id"] == "for90", "retained"].item()
+        assert audit.loc[audit["proposal_id"] == "mixed", "retained"].item()
+        assert audit.loc[audit["proposal_id"] == "short", "exclusion_reasons"].item() == "high_against_consensus|short_title|short_body"
+        assert set(lean["proposal_id"]) == {"mixed"}
+
+    def test_body_filter_requires_body_column(self):
+        votes = pd.DataFrame(
+            [{"space": "a.eth", "proposal_id": "p1", "choice_norm": "for", "proposal_title": "Title"}]
+        )
+        with pytest.raises(ValueError, match="requires 'proposal_body'"):
+            build_lean_proposal_sample(
+                votes,
+                max_for_fraction=1.0,
+                max_against_fraction=1.0,
+                min_title_chars=0,
+                min_body_chars=1,
+            )
+
+    def test_stage03_writes_separate_lean_variant(self, tmp_path: Path):
+        raw = pd.DataFrame(
+            [
+                {
+                    "space": "a.eth",
+                    "proposal_id": "landslide",
+                    "voter": f"voter_{index}",
+                    "choice_norm": "for",
+                    "vote_timestamp": "2023-01-01T00:00:00Z",
+                    "proposal_title": "A sufficient title",
+                    "proposal_body": "A sufficient proposal body",
+                    "voting_power": 1.0,
+                }
+                for index in range(10)
+            ]
+            + [
+                {
+                    "space": "a.eth",
+                    "proposal_id": "contested",
+                    "voter": f"other_{index}",
+                    "choice_norm": choice,
+                    "vote_timestamp": "2023-01-02T00:00:00Z",
+                    "proposal_title": "A sufficient title",
+                    "proposal_body": "A sufficient proposal body",
+                    "voting_power": 1.0,
+                }
+                for index, choice in enumerate(["for", "for", "against", "against"])
+            ]
+        )
+        raw_path = tmp_path / "raw.parquet"
+        raw.to_parquet(raw_path, index=False)
+        cfg = {
+            "paths": {
+                "master_votes_parquet": str(raw_path),
+                "cleaned_master_parquet": "canonical.parquet",
+                "cleaned_master_lean_parquet": "lean.parquet",
+                "lean_proposal_audit_csv": "lean_audit.csv",
+            },
+            "data_quality": {"dedupe_keys": ["voter", "space", "proposal_id"], "valid_choice_norm": ["for", "against", "abstain"]},
+            "cleaning": {
+                "negative_voting_power_policy": "drop",
+                "extreme_vp_quantile": 0.999,
+                "flag_extreme_voting_power": False,
+                "lean_sample": {"enabled": True, "max_for_fraction": 0.90, "max_against_fraction": 0.90, "min_title_chars": 1, "min_body_chars": 1},
+            },
+            "reports": {"stage03_md": "stage03.md"},
+        }
+
+        canonical_path = run_global_cleaning_stage(cfg, tmp_path)
+        canonical = pd.read_parquet(canonical_path)
+        lean = pd.read_parquet(tmp_path / "lean.parquet")
+        audit = pd.read_csv(tmp_path / "lean_audit.csv")
+        assert len(canonical) == 14
+        assert set(lean["proposal_id"]) == {"contested"}
+        assert set(audit["proposal_id"]) == {"landslide", "contested"}
 
 
 class TestClusterSafety:

@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 from dao_governance.data.validation import CleanStats, clean_master_votes
+from dao_governance.data.proposal_sampling import build_lean_proposal_sample
 
 
 @dataclass
@@ -207,6 +208,30 @@ def run_global_cleaning_stage(cfg: Dict[str, Any], root: Path) -> Path:
         extreme_quantile=float(cl.get("extreme_vp_quantile", 0.999)),
         flag_extreme=bool(cl.get("flag_extreme_voting_power", True)),
     )
+
+    lean_cfg = cl.get("lean_sample") or {}
+    if bool(lean_cfg.get("enabled", False)):
+        lean_votes, lean_audit = build_lean_proposal_sample(
+            cleaned_votes,
+            max_for_fraction=float(lean_cfg.get("max_for_fraction", 0.90)),
+            max_against_fraction=float(lean_cfg.get("max_against_fraction", 0.90)),
+            min_title_chars=int(lean_cfg.get("min_title_chars", 0)),
+            min_body_chars=int(lean_cfg.get("min_body_chars", 0)),
+        )
+        lean_path = (root / paths.get("cleaned_master_lean_parquet", "data/processed/votes_cleaned_lean.parquet")).resolve()
+        audit_path = (root / paths.get("lean_proposal_audit_csv", "data/processed/proposal_lean_audit.csv")).resolve()
+        lean_path.parent.mkdir(parents=True, exist_ok=True)
+        audit_path.parent.mkdir(parents=True, exist_ok=True)
+        lean_votes.to_parquet(lean_path, index=False)
+        lean_audit.to_csv(audit_path, index=False)
+        gsum.notes.extend(
+            [
+                "Lean proposal sample written separately; canonical cleaned votes were not filtered.",
+                f"Lean proposal retention: {int(lean_audit['retained'].sum())}/{len(lean_audit)} proposals; "
+                f"{len(lean_votes)}/{len(cleaned_votes)} votes.",
+                f"Lean outputs: {lean_path}; audit: {audit_path}",
+            ]
+        )
 
     proposals_path_rel = (paths.get("proposals_parquet") or "").strip()
     if proposals_path_rel:

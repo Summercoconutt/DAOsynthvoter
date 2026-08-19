@@ -173,6 +173,12 @@ Built by `build_behaviour_dataset()` — **no cluster merge by default**.
 - `outputs/tables/behaviour_dataset.csv` — base table  
 - `outputs/tables/behaviour_dataset_with_clusters.csv` — after train-only assign (for 08b cache / Stage 09 eval)
 
+### 6.1 Optional lean proposal sample
+
+Stage 03 can optionally write `votes_cleaned_lean.parquet` without replacing the canonical cleaned votes. This experimental variant removes an entire `(space, proposal_id)` when FOR or AGAINST reaches its configured consensus threshold, or when title/body character counts are below configured minima. Vote fractions include ABSTAIN in their denominator. The companion `proposal_lean_audit.csv` records each proposal's counts, fractions, text lengths, retention flag, and exclusion reasons.
+
+This is outcome-based sample selection, not leakage remediation. A model trained on the lean sample must be evaluated on the same sample definition and described as applying only to retained, non-landslide proposals.
+
 ---
 
 ## 7. Exploratory features (NOT model inputs)
