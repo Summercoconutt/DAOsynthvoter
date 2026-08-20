@@ -44,6 +44,7 @@ paths:
 
   behaviour_dataset_csv: "outputs/tables/behaviour_dataset.csv"
   model_artifacts_dir: "outputs/models/behaviour_agent2"
+  model_artifacts_dir_no_roberta: "outputs/behaviour_modelling/agent2_artifacts_no_roberta"
   eval_output_dir: "outputs/tables/eval"
   split_manifest_json: "outputs/processed/split_manifest.json"
   predictive_cluster_artifacts_dir: "outputs/models/predictive_clusters"
@@ -86,10 +87,10 @@ cleaning:
   flag_extreme_voting_power: true
   # Experimental outcome-selected sample; canonical cleaned votes remain unchanged.
   lean_sample:
-    enabled: false
+    enabled: true
     max_for_fraction: 0.90
     max_against_fraction: 0.90
-    min_title_chars: 10
+    min_title_chars: 8
     min_body_chars: 50
 
 clustering:

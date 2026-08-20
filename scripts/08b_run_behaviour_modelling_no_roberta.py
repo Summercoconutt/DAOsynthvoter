@@ -324,7 +324,10 @@ def main() -> None:
     if not dao_feat.exists():
         dao_feat = (base / paths.get("dao_feature_table_parquet", "data/processed/dao_feature_table.parquet")).resolve()
     cluster_dir = (base / paths.get("predictive_cluster_artifacts_dir", "outputs/models/predictive_clusters")).resolve()
-    out_dir = (base / "outputs/behaviour_modelling/agent2_artifacts_no_roberta").resolve()
+    out_dir = (
+        base
+        / paths.get("model_artifacts_dir_no_roberta", "outputs/behaviour_modelling/agent2_artifacts_no_roberta")
+    ).resolve()
     logs_dir = (base / paths.get("logs_dir", "outputs/logs")).resolve()
     split_path = (base / paths.get("split_manifest_json", "outputs/processed/split_manifest.json")).resolve()
     prep_report = (base / reports.get("preprocessing_md", "outputs/tables/preprocessing_report_no_roberta.md")).resolve()

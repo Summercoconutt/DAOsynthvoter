@@ -1,0 +1,22 @@
+# Example: raw votes live on lab disk (read-only). Merge with default.yaml:
+#
+#   python scripts/03_run_global_cleaning.py --config configs/default.yaml --extra-config configs/example_server_raw.yaml
+#
+# Edit master_votes_parquet to your actual file under D:/111111/Data/...
+
+paths:
+  master_votes_parquet: "/home/carlo/data/summer_voters/snapshot_votes_441/outputs/DAO representative_20260326_153850/merged_votes_10daos.parquet"
+  cleaned_master_parquet: "data/processed/votes_cleaned_lean.parquet"
+  snapshot_spaces_root: "/home/carlo/data/summer_voters/snapshot_votes_441/spaces"
+  representative_csv: "/home/carlo/data/summer_voters/snapshot_votes_441/outputs/DAO representative_20260326_153850/dao_representative_voters_10daos.csv"
+  model_artifacts_dir: "outputs/models/behaviour_agent2_lean"
+  model_artifacts_dir_no_roberta: "outputs/behaviour_modelling/agent2_artifacts_no_roberta_lean"
+  behaviour_dataset_csv: "outputs/tables/behaviour_dataset_lean.csv"
+  logs_dir: "outputs/logs/lean"
+  split_manifest_json: "outputs/processed/split_manifest_lean.json"
+  predictive_cluster_artifacts_dir: "outputs/models/predictive_clusters_lean"
+
+reports:
+  preprocessing_md: "outputs/tables/preprocessing_report_lean.md"
+  training_md: "outputs/tables/training_report_lean.md"
+  stage08_md: "outputs/reports/stage08_behaviour_lean.md"
