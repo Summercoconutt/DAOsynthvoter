@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import duckdb
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 
 from dao_governance.modelling.preprocess import normalise_columns
 from dao_governance.modelling.windows import (
@@ -161,6 +162,7 @@ def materialize_split_cache(
 
     write_idx = 0
     carry_over = pd.DataFrame(columns=SLIM_COLUMNS)
+    pbar = tqdm(total=n_windows, desc=f"{split_name} window cache", unit="win")
 
     rel = con.execute(
         f"""
@@ -188,6 +190,7 @@ def materialize_split_cache(
         dao_mm[write_idx : write_idx + n] = dao_cs
         voter_mm[write_idx : write_idx + n] = voter_cs
         write_idx += n
+        pbar.update(n)
 
     while True:
         chunk = rel.fetch_df_chunk(chunk_rows)
@@ -231,6 +234,7 @@ def materialize_split_cache(
 
     if not carry_over.empty:
         _flush_group([carry_over])
+    pbar.close()
 
     if write_idx != n_windows:
         print(f"[cache] WARNING: expected {n_windows} windows, wrote {write_idx}")

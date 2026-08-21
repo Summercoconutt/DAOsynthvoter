@@ -174,6 +174,8 @@ def split_by_voter_three_way(
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Disjoint voter splits; remaining goes to test."""
     voters = df["voter"].dropna().astype(str).unique()
+    # force a plain ndarray: shuffling arrow-backed string arrays in place is slow/unsafe
+    voters = np.asarray(voters, dtype=object)
     rng = np.random.default_rng(seed)
     rng.shuffle(voters)
     n = len(voters)

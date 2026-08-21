@@ -6,6 +6,7 @@ from typing import List, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 
 # Label-derived columns: allowed in history steps, zeroed at prediction step.
 LABEL_DERIVED_AT_PREDICT_TIME = frozenset({"aligned_with_majority"})
@@ -87,7 +88,8 @@ def build_windows(
     df = df[df["label_id"].isin([0, 1, 2])].copy()
     out: List[Window] = []
 
-    for group_key, g in df.groupby(list(group_cols)):
+    grouped = df.groupby(list(group_cols))
+    for group_key, g in tqdm(grouped, total=grouped.ngroups, desc="building windows"):
         g = g.sort_values("vote_ts").reset_index(drop=True)
         if len(g) < window_size:
             continue

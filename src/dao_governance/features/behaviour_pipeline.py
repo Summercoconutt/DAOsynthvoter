@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, Tuple
 
 import pandas as pd
+from tqdm import tqdm
 
 from dao_governance.features.causal_clusters import (
     ClusterBundle,
@@ -33,7 +34,8 @@ def add_prior_vote_fractions(df: pd.DataFrame) -> pd.DataFrame:
         sort_cols.append("proposal_id")
     sort_cols.append("_source_order")
 
-    for _, group in out.groupby(["voter", "space"], sort=False):
+    grouped = out.groupby(["voter", "space"], sort=False)
+    for _, group in tqdm(grouped, total=grouped.ngroups, desc="prior-vote fractions"):
         ordered = group.sort_values(sort_cols, kind="mergesort")
         prior_count = pd.Series(range(len(ordered)), index=ordered.index, dtype=float)
         prior_for = (ordered["label_id"] == 0).cumsum().shift(fill_value=0)
