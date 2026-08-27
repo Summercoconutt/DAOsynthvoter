@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import shutil
 import sys
 from pathlib import Path
 
@@ -78,6 +79,14 @@ def _write_behaviour_csv_meta(path: Path, *, text_mode: str) -> None:
     path.write_text(json.dumps({"text_mode": text_mode}, indent=2), encoding="utf-8")
 
 
+def _save_behaviour_copy(path: Path, tag: str) -> Path:
+    suffix = f"_{tag.strip()}" if tag.strip() else ""
+    copy_path = path.with_name(f"{path.stem}_08{suffix}{path.suffix}")
+    shutil.copyfile(path, copy_path)
+    print(f"[08] Saved behaviour CSV copy: {copy_path}")
+    return copy_path
+
+
 def _assert_reusable_behaviour_csv(behaviour_csv: Path, *, text_mode: str) -> None:
     meta_path = _behaviour_csv_meta_path(behaviour_csv)
     if not meta_path.exists():
@@ -98,6 +107,8 @@ def main() -> None:
     ap.add_argument("--config", type=str, default="configs/default.yaml")
     ap.add_argument("--extra-config", type=str, default="")
     ap.add_argument("--reuse-behaviour-csv", action="store_true", help="Skip rebuilding behaviour CSV if it exists.")
+    ap.add_argument("--save-behaviour-copy", nargs="?", const="", default=None, metavar="TAG",
+                    help="Save a byte-for-byte copy as behaviour_dataset_with_clusters_08_[TAG].csv.")
     args = ap.parse_args()
 
     _log_phase("starting behaviour modelling run")
@@ -193,6 +204,8 @@ def main() -> None:
     _log_phase("writing enriched behaviour CSV")
     write_enriched_behaviour_csv(tr_a, va_a, te_a, enriched_csv)
     print(f"[08] Enriched behaviour CSV (clusters): {enriched_csv}")
+    if args.save_behaviour_copy is not None:
+        _save_behaviour_copy(enriched_csv, args.save_behaviour_copy)
 
     prep_report.write_text(
         "# Preprocessing report\n\n"

@@ -20,6 +20,7 @@ import csv
 import json
 import random
 import re
+import shutil
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -208,6 +209,14 @@ def _csv_has_columns(csv_path: Path, required: list[str]) -> bool:
     return all(c.lower() in cols for c in required)
 
 
+def _save_behaviour_copy(path: Path, tag: str) -> Path:
+    suffix = f"_{tag.strip()}" if tag.strip() else ""
+    copy_path = path.with_name(f"{path.stem}_08b{suffix}{path.suffix}")
+    shutil.copyfile(path, copy_path)
+    print(f"[08b] Saved behaviour CSV copy: {copy_path}")
+    return copy_path
+
+
 def _prepare_from_cache(
     *,
     behaviour_csv: Path,
@@ -261,6 +270,8 @@ def main() -> None:
     ap.add_argument("--config", type=str, default="configs/default.yaml")
     ap.add_argument("--extra-config", type=str, default="")
     ap.add_argument("--reuse-behaviour-csv", action="store_true", help="Skip rebuilding behaviour CSV if it exists.")
+    ap.add_argument("--save-behaviour-copy", nargs="?", const="", default=None, metavar="TAG",
+                    help="Save a byte-for-byte copy as behaviour_dataset_with_clusters_08b_[TAG].csv.")
     ap.add_argument(
         "--reuse-split-manifest",
         action="store_true",
@@ -523,6 +534,11 @@ def main() -> None:
         feat_dim = len(train_windows[0].window_features[0])
         train_labels = np.array([w.target_label for w in train_windows], dtype=int)
         valid_labels = np.array([w.target_label for w in valid_windows], dtype=int)
+
+    if args.save_behaviour_copy is not None:
+        if not enriched_csv.exists():
+            raise FileNotFoundError(f"Cannot save behaviour copy; missing {enriched_csv}")
+        _save_behaviour_copy(enriched_csv, args.save_behaviour_copy)
 
     max_tr = args.max_train_windows if args.max_train_windows is not None else int(bm.get("max_train_windows", 0))
     max_va = args.max_valid_windows if args.max_valid_windows is not None else int(bm.get("max_valid_windows", 0))

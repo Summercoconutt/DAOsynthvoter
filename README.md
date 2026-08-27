@@ -80,6 +80,55 @@ Outputs under `outputs/tables/eval/{test|val}/`:
 
 Do **not** use code under `src/deprecated/behaviour_modelling/` for models trained by Stage 08.
 
+## Integrated Gradients / SHAP analysis
+
+Stage 08 and Stage 08b save model weights, but they do not generate attribution
+values. To reproduce a trained model and run Integrated Gradients or SHAP, keep
+the following files from the same training run.
+
+### Stage 08: RoBERTa + numeric model
+
+- `outputs/models/behaviour_agent2/model.pt` — trained PyTorch `state_dict`.
+- `outputs/models/behaviour_agent2/config.json` — model architecture, feature
+  dimension, label map, window size, preprocessing parameters, and paths.
+- `outputs/models/behaviour_agent2/tokenizer/` — tokenizer files, including the
+  added special tokens used for historical labels and prediction steps.
+- `outputs/tables/behaviour_dataset.csv` and/or
+  `outputs/tables/behaviour_dataset_with_clusters.csv` — source rows used to
+  reconstruct the temporal windows.
+- `outputs/processed/split_manifest.json` — the leakage-safe voter split, when
+  analysing train/validation/test examples consistently with training.
+- `outputs/models/predictive_clusters/cluster_bundle.pkl` — required if cluster
+  features or cluster assignments must be reproduced from source data.
+- `src/dao_governance/modelling/model.py`, `dataset.py`, `preprocess.py`, and
+  `windows.py` — model definition, tokenisation/collation, preprocessing, and
+  window construction.
+
+For text explanations, use embedding-level Integrated Gradients or a custom
+SHAP wrapper; integer token IDs are not differentiable. Numeric features can be
+attributed directly.
+
+### Stage 08b: numeric-only model
+
+- `outputs/behaviour_modelling/agent2_artifacts_no_roberta/model.pt` — trained
+  PyTorch `state_dict`.
+- `outputs/behaviour_modelling/agent2_artifacts_no_roberta/config.json` — model
+  architecture, feature ordering, preprocessing parameters, and window size.
+- `outputs/tables/behaviour_dataset_with_clusters.csv` (preferred) or
+  `outputs/tables/behaviour_dataset.csv` — source rows, including the causal
+  historical-choice features when applicable.
+- `outputs/processed/split_manifest.json` — the training voter split.
+- `outputs/behaviour_modelling/window_cache_no_roberta/` — optional; use its
+  `meta.json` and memmap files when analysing cached windows instead of
+  rebuilding them from the CSV.
+- `src/dao_governance/modelling/model.py`, `dataset.py`, `preprocess.py`, and
+  `windows.py` — model definition and exact numeric window construction.
+
+Stage 08b is directly compatible with feature-level Integrated Gradients or
+numeric SHAP wrappers. In both cases, use the saved preprocessing statistics,
+feature ordering, temporal window size, and a documented baseline/background
+dataset.
+
 **Cleaning server exports without touching `Data/`:** set an absolute `paths.master_votes_parquet` in `configs/example_server_raw.yaml` (copy and edit), then:
 
 ```text
