@@ -24,7 +24,16 @@ python scripts/04_run_dao_metrics.py "${COMMON_ARGS[@]}" # Required by Stage 08 
 # python scripts/05_run_feature_selection.py "${COMMON_ARGS[@]}" # Exploratory DAO analysis; not required for Stage 08.
 # python scripts/06_run_dao_clustering.py "${COMMON_ARGS[@]}" # Exploratory DAO analysis; not required for Stage 08.
 # python scripts/07_run_voter_clustering.py "${COMMON_ARGS[@]}" # Exploratory voter analysis; not required for Stage 08.
-python scripts/08_run_behaviour_modelling.py "${COMMON_ARGS[@]}" # Add --reuse-behaviour-csv only when its text_mode metadata matches.
-python scripts/08b_run_behaviour_modelling_no_roberta.py "${COMMON_ARGS[@]}" --reuse-behaviour-csv --reuse-split-manifest # Add --reuse-window-cache only after its schema matches.
+# Stage 08 and Stage 08b are always run in sequence for the BERT ablation study.
+# 08 trains the full RoBERTa + numeric + cluster model; 08b trains the same setup without RoBERTa.
+# Keep the dataset and split identical between the two runs; only the BERT inclusion changes.
+# --reuse-behaviour-csv reuses the same behaviour_dataset.csv when the text mode metadata still matches.
+# --reuse-split-manifest reuses the same train/val/test voter split from 08, which is important for fair comparison.
+# --save-behaviour-copy is optional: it makes a snapshot of the enriched CSV for audit/comparison, e.g.
+#   --save-behaviour-copy full_ref or --save-behaviour-copy full_no_roberta.
+# Use --reuse-window-cache only after confirming the 08b cache schema matches the current run.
+python scripts/08_run_behaviour_modelling.py "${COMMON_ARGS[@]}" # Full-reference run for the BERT ablation study.
+python scripts/08b_run_behaviour_modelling_no_roberta.py "${COMMON_ARGS[@]}" --reuse-behaviour-csv --reuse-split-manifest # Ablation of 08: same data/split, no RoBERTa.
 # When running lean: set paths.model_artifacts_dir_no_roberta and pass --window-cache-dir in EXTRA_CONFIG/CLI to avoid overwriting full-data 08b outputs.
+# The same order still applies on the lean dataset: run 08 first, then 08b immediately afterward for a consistent ablation.
 python scripts/09_run_behaviour_evaluation.py "${COMMON_ARGS[@]}" --split test # Replace test with val for validation metrics.
