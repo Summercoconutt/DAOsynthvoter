@@ -167,6 +167,25 @@ def write_comparison_csv(base: Path, no_roberta_cfg_path: Path, no_roberta_repor
     return out_path
 
 
+def _resolve_preprocessor_path(base: Path, reuse_preprocessor_from: str) -> Optional[Path]:
+    source = reuse_preprocessor_from.strip()
+    if source:
+        pre_path = Path(source)
+        if not pre_path.is_absolute():
+            pre_path = (base / pre_path).resolve()
+        return pre_path
+
+    for candidate in (
+        base / "outputs/behaviour_modelling/agent2_artifacts_no_roberta/config.json",
+        base / "outputs/models/behaviour_agent2/config.json",
+        base / "outputs/behaviour_modelling/agent2_artifacts/config.json",
+    ):
+        if candidate.exists():
+            return candidate.resolve()
+
+    return None
+
+
 def _load_preprocessor_from_config(path: Path) -> Dict[str, Any]:
     data = json.loads(path.read_text(encoding="utf-8"))
     pre = data.get("numeric_preprocessor")
@@ -377,22 +396,7 @@ def main() -> None:
     _assert_csv_schema(cache_csv, required=["voter", "space", "vote_ts", "label_id"])
 
     preprocessor: Dict[str, Any] | None = None
-    prep_source = args.reuse_preprocessor_from.strip()
-    if prep_source:
-        pre_path = Path(prep_source)
-        if not pre_path.is_absolute():
-            pre_path = (base / pre_path).resolve()
-    else:
-        for candidate in (
-            base / "outputs/behaviour_modelling/agent2_artifacts_no_roberta/config.json",
-            base / "outputs/models/behaviour_agent2/config.json",
-            base / "outputs/behaviour_modelling/agent2_artifacts/config.json",
-        ):
-            if candidate.exists():
-                pre_path = candidate.resolve()
-                break
-        else:
-            pre_path = Path("")
+    pre_path = _resolve_preprocessor_path(base, args.reuse_preprocessor_from)
 
     if use_cache:
         _log_phase("using large-dataset cache mode")
@@ -416,7 +420,9 @@ def main() -> None:
             enriched_csv, ["prior_frac_for", "prior_frac_against"]
         )
         existing_preprocessor = (
-            _load_preprocessor_from_config(pre_path) if pre_path.exists() else None
+            _load_preprocessor_from_config(pre_path)
+            if pre_path is not None and pre_path.exists() and pre_path.is_file()
+            else None
         )
         need_prepare = (
             not has_history_features
@@ -443,7 +449,7 @@ def main() -> None:
                 include_prior_vote_fractions=True,
             )
             write_enriched_behaviour_csv(tr_a, va_a, te_a, enriched_csv)
-        elif pre_path.exists():
+        elif pre_path is not None and pre_path.exists() and pre_path.is_file():
             preprocessor = existing_preprocessor
             print(f"[08b] Loaded preprocessor from {pre_path}")
 
