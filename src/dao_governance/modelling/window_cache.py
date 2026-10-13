@@ -11,6 +11,7 @@ import pandas as pd
 from tqdm import tqdm
 
 from dao_governance.modelling.preprocess import normalise_columns
+from dao_governance.modelling.run_artifacts import sha256_file, sha256_json
 from dao_governance.modelling.windows import (
     LABEL_DERIVED_AT_PREDICT_TIME,
     WINDOW_GROUP_COLS,
@@ -289,7 +290,10 @@ def materialize_window_cache(
     con.close()
     meta = {
         "csv_path": str(csv_path.resolve()),
+        "csv_sha256": sha256_file(csv_path),
         "split_manifest": str(split_manifest_path.resolve()),
+        "split_manifest_sha256": sha256_file(split_manifest_path),
+        "preprocessor_sha256": sha256_json(preprocessor),
         "window_size": window_size,
         "numeric_columns": numeric_cols,
         "splits": split_meta,

@@ -6,11 +6,12 @@ Compare against the existing RoBERTa pipeline without modifying it.
 
   cd whole_pipeline
   set PYTHONPATH=src
-  python scripts/08b_run_behaviour_modelling_no_roberta.py --config configs/default.yaml
+    python scripts/08b_run_behaviour_modelling_no_roberta.py --config configs/default.yaml \\
+            --data-sources-config configs/data_sources.yaml --run-id full_trial_01
 
 Quick smoke test:
   python scripts/08b_run_behaviour_modelling_no_roberta.py --config configs/default.yaml \\
-      --extra-config configs/smoke_no_roberta.yaml --reuse-behaviour-csv \\
+    --extra-config configs/smoke_no_roberta.yaml --run-id smoke-no-roberta \\
       --max-train-windows 320 --max-valid-windows 96
 """
 from __future__ import annotations
@@ -37,7 +38,6 @@ from sklearn.metrics import confusion_matrix
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from dao_governance.features.behaviour_dataset import build_behaviour_dataset
 from dao_governance.features.behaviour_pipeline import (
     load_behaviour_votes,
     prepare_behaviour_splits,
@@ -52,9 +52,19 @@ from dao_governance.modelling.metrics import macro_prf
 from dao_governance.modelling.model import NumericOnlyTimeSeriesClassifier
 from dao_governance.modelling.preprocess import (
     assert_finite_feature_columns,
-    save_split_manifest,
+    load_split_manifest,
     select_numeric_columns_no_roberta,
     split_by_voter_three_way,
+)
+from dao_governance.modelling.run_artifacts import (
+    record_stage,
+    resolve_artifact_path,
+    resolve_run_root,
+    resolve_stage_inputs,
+    sha256_file,
+    sha256_json,
+    verify_recorded_artifacts,
+    verify_run_identity,
 )
 from dao_governance.modelling.window_cache import load_window_cache_meta, materialize_window_cache
 from dao_governance.modelling.windows import build_windows
@@ -83,56 +93,38 @@ def _parse_best_f1_from_report(path: Path) -> Optional[float]:
     return None
 
 
-def _read_roberta_result(base: Path) -> Dict[str, Any]:
-    report_candidates = [
-        base / "outputs/tables/training_report.md",
-        base / "outputs/behaviour_modelling/training_report.md",
-        base / "../test_pipeline/outputs/tables/training_report.md",
-    ]
-    config_candidates = [
-        base / "outputs/behaviour_modelling/agent2_artifacts/config.json",
-        base / "outputs/models/behaviour_agent2/config.json",
-        base / "../test_pipeline/outputs/behaviour_modelling/agent2_artifacts/config.json",
-    ]
-
-    best_f1: Optional[float] = None
-    config_path: Optional[Path] = None
-    training_report_path: Optional[Path] = None
-    artifact_dir: Optional[Path] = None
-
-    for p in config_candidates:
-        p = p.resolve()
-        if p.exists():
-            config_path = p
-            artifact_dir = p.parent
-            data = json.loads(p.read_text(encoding="utf-8"))
-            best_f1 = data.get("best_valid_f1")
-            break
-
-    for p in report_candidates:
-        p = p.resolve()
-        if p.exists():
-            training_report_path = p
-            if best_f1 is None:
-                best_f1 = _parse_best_f1_from_report(p)
-            break
-
+def _read_roberta_result(config_path: Path, report_path: Path) -> Dict[str, Any]:
+    config_path = config_path.resolve()
+    report_path = report_path.resolve()
+    if not config_path.is_file() or not report_path.is_file():
+        raise FileNotFoundError("Stage 08 model config and training report are required for the paired comparison")
+    data = json.loads(config_path.read_text(encoding="utf-8"))
+    best_f1: Optional[float] = data.get("best_valid_f1")
+    if best_f1 is None:
+        best_f1 = _parse_best_f1_from_report(report_path)
     return {
         "model_name": "RoBERTa + Numeric + Clusters",
         "use_roberta": True,
         "use_text": True,
         "best_valid_macro_f1": best_f1,
-        "artifact_dir": str(artifact_dir) if artifact_dir else "",
+        "artifact_dir": str(config_path.parent),
         "config_path": str(config_path) if config_path else "",
-        "training_report_path": str(training_report_path) if training_report_path else "",
+        "training_report_path": str(report_path),
     }
 
 
-def write_comparison_csv(base: Path, no_roberta_cfg_path: Path, no_roberta_report_path: Path) -> Path:
-    out_path = (base / "outputs/tables/roberta_vs_no_roberta_comparison.csv").resolve()
+def write_comparison_csv(
+    run_root: Path,
+    no_roberta_cfg_path: Path,
+    no_roberta_report_path: Path,
+) -> Path:
+    out_path = run_root / "08b" / "reports" / "roberta_vs_no_roberta_comparison.csv"
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    roberta_row = _read_roberta_result(base)
+    roberta_row = _read_roberta_result(
+        run_root / "08" / "config.json",
+        run_root / "08" / "reports" / "training_report.md",
+    )
 
     no_data: Dict[str, Any] = {}
     if no_roberta_cfg_path.exists():
@@ -167,23 +159,14 @@ def write_comparison_csv(base: Path, no_roberta_cfg_path: Path, no_roberta_repor
     return out_path
 
 
-def _resolve_preprocessor_path(base: Path, reuse_preprocessor_from: str) -> Optional[Path]:
+def _resolve_preprocessor_path(base: Path, reuse_preprocessor_from: str, stage08_config: Path) -> Optional[Path]:
     source = reuse_preprocessor_from.strip()
     if source:
         pre_path = Path(source)
         if not pre_path.is_absolute():
             pre_path = (base / pre_path).resolve()
         return pre_path
-
-    for candidate in (
-        base / "outputs/behaviour_modelling/agent2_artifacts_no_roberta/config.json",
-        base / "outputs/models/behaviour_agent2/config.json",
-        base / "outputs/behaviour_modelling/agent2_artifacts/config.json",
-    ):
-        if candidate.exists():
-            return candidate.resolve()
-
-    return None
+    return stage08_config.resolve() if stage08_config.is_file() else None
 
 
 def _load_preprocessor_from_config(path: Path) -> Dict[str, Any]:
@@ -228,6 +211,15 @@ def _csv_has_columns(csv_path: Path, required: list[str]) -> bool:
     return all(c.lower() in cols for c in required)
 
 
+def _assert_run_split(split_path: Path, train_df: pd.DataFrame, val_df: pd.DataFrame, test_df: pd.DataFrame) -> None:
+    saved_split = load_split_manifest(split_path)
+    for split_name, split_frame in (("train", train_df), ("val", val_df), ("test", test_df)):
+        actual = sorted(split_frame["voter"].astype(str).unique().tolist())
+        expected = saved_split.get(f"{split_name}_voters") or []
+        if actual != expected:
+            raise RuntimeError(f"Recomputed {split_name} voters do not match the Stage 08 split manifest")
+
+
 def _save_behaviour_copy(path: Path, tag: str) -> Path:
     suffix = f"_{tag.strip()}" if tag.strip() else ""
     copy_path = path.with_name(f"{path.stem}_08b{suffix}{path.suffix}")
@@ -250,10 +242,17 @@ def _prepare_from_cache(
     if reuse_cache and meta_path.exists():
         print("[08b] Reusing window cache:", cache_dir)
         meta = load_window_cache_meta(cache_dir)
-        if meta.get("numeric_columns") != numeric_cols or meta.get("window_size") != window_size:
+        cache_matches = (
+            meta.get("numeric_columns") == numeric_cols
+            and meta.get("window_size") == window_size
+            and meta.get("csv_sha256") == sha256_file(behaviour_csv)
+            and meta.get("split_manifest_sha256") == sha256_file(split_path)
+            and meta.get("preprocessor_sha256") == sha256_json(preprocessor)
+        )
+        if not cache_matches:
             raise RuntimeError(
-                "[08b] Window cache schema does not match this run. "
-                "Delete the cache directory or rerun without --reuse-window-cache."
+                "[08b] Window cache data, split, preprocessor, or schema does not match this run. "
+                "Use a new run ID or rebuild the cache without --reuse-window-cache."
             )
     else:
         print("[08b] Materializing window cache (this may take a while)...")
@@ -270,16 +269,6 @@ def _prepare_from_cache(
     return train_ds, valid_ds, meta
 
 
-def _resolve_master_parquet(base: Path, paths: dict) -> Path:
-    cleaned = (base / paths.get("cleaned_master_parquet", "data/processed/votes_cleaned.parquet")).resolve()
-    if cleaned.exists():
-        return cleaned
-    merged = (base / paths.get("master_with_dao_parquet", "data/processed/master_votes_with_dao_cluster.parquet")).resolve()
-    if merged.exists():
-        return merged
-    raise FileNotFoundError(f"Need cleaned or master votes parquet under {base}")
-
-
 def _log_phase(message: str) -> None:
     print(f"[08b] {message}")
 
@@ -287,8 +276,10 @@ def _log_phase(message: str) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", type=str, default="configs/default.yaml")
+    ap.add_argument("--data-sources-config", type=str, default="configs/data_sources.yaml")
     ap.add_argument("--extra-config", type=str, default="")
-    ap.add_argument("--reuse-behaviour-csv", action="store_true", help="Skip rebuilding behaviour CSV if it exists.")
+    ap.add_argument("--run-id", required=True, help="The existing Stage 08 run ID to pair with.")
+    ap.add_argument("--resume-stage", action="store_true", help="Resume an incomplete 08b stage within this run.")
     ap.add_argument("--save-behaviour-copy", nargs="?", const="", default=None, metavar="TAG",
                     help="Save a byte-for-byte copy as behaviour_dataset_with_clusters_08b_[TAG].csv.")
     ap.add_argument(
@@ -301,17 +292,12 @@ def main() -> None:
         action="store_true",
         help="Skip rebuilding on-disk window cache if meta.json exists.",
     )
-    ap.add_argument(
-        "--window-cache-dir",
-        type=str,
-        default="outputs/behaviour_modelling/window_cache_no_roberta",
-        help="Directory for memmap window cache on large datasets.",
-    )
+    ap.add_argument("--window-cache-dir", type=str, default="", help="Run-relative window cache directory.")
     ap.add_argument(
         "--reuse-preprocessor-from",
         type=str,
         default="",
-        help="Load numeric_preprocessor from an existing model config.json (default: RoBERTa artifacts).",
+        help="Load numeric_preprocessor from the paired Stage 08 model config (normally automatic).",
     )
     ap.add_argument(
         "--max-train-windows",
@@ -330,8 +316,13 @@ def main() -> None:
     _log_phase("starting no-RoBERTa behaviour modelling run")
     base = project_root()
     cfg_path = (base / args.config).resolve() if not Path(args.config).is_absolute() else Path(args.config)
+    data_sources_cfg_path = (
+        (base / args.data_sources_config).resolve()
+        if not Path(args.data_sources_config).is_absolute()
+        else Path(args.data_sources_config).resolve()
+    )
     extra = (base / args.extra_config).resolve() if args.extra_config else None
-    cfg = load_config(config_path=cfg_path, extra_path=extra)
+    cfg = load_config(config_path=cfg_path, extra_path=extra, data_sources_path=data_sources_cfg_path)
     _log_phase(f"loaded config from {cfg_path}")
 
     seed = int(cfg.get("project", {}).get("seed", 42))
@@ -345,42 +336,51 @@ def main() -> None:
     paths = cfg.get("paths", {})
     bm = cfg.get("behaviour_model", {})
     dq = cfg.get("data_quality", {})
-    reports = cfg.get("reports") or {}
+    run_id = args.run_id.strip()
+    sample_variant = str((cfg.get("run") or {}).get("sample_variant", "full")).strip().lower()
+    run_root = resolve_run_root(base, cfg, run_id)
+    configured_inputs = resolve_stage_inputs(base, cfg)
+    manifest = verify_run_identity(
+        run_root,
+        run_id=run_id,
+        sample_variant=sample_variant,
+        config=cfg,
+        input_paths=configured_inputs,
+    )
+    if "08" not in (manifest.get("stages") or {}):
+        raise RuntimeError(f"Stage 08 has not completed for run {run_id!r}")
+    if "08b" in manifest.get("stages", {}):
+        raise RuntimeError(f"Stage 08b is already recorded for run {run_id!r}; use a new run ID")
+    verify_recorded_artifacts(run_root, manifest)
+    stage08_config_path = run_root / "08" / "config.json"
+    stage08_config = json.loads(stage08_config_path.read_text(encoding="utf-8"))
 
-    behaviour_csv = (base / paths.get("behaviour_dataset_csv", "outputs/tables/behaviour_dataset.csv")).resolve()
-    enriched_csv = behaviour_csv.with_name("behaviour_dataset_with_clusters.csv")
-    master_parquet = _resolve_master_parquet(base, paths)
-    dao_feat = (base / paths.get("dao_feature_table_csv", "data/processed/dao_feature_table.csv")).resolve()
-    if not dao_feat.exists():
-        dao_feat = (base / paths.get("dao_feature_table_parquet", "data/processed/dao_feature_table.parquet")).resolve()
-    cluster_dir = (base / paths.get("predictive_cluster_artifacts_dir", "outputs/models/predictive_clusters")).resolve()
-    out_dir = (
-        base
-        / paths.get("model_artifacts_dir_no_roberta", "outputs/behaviour_modelling/agent2_artifacts_no_roberta")
-    ).resolve()
-    logs_dir = (base / paths.get("logs_dir", "outputs/logs")).resolve()
-    split_path = (base / paths.get("split_manifest_json", "outputs/processed/split_manifest.json")).resolve()
-    prep_report = (base / reports.get("preprocessing_md", "outputs/tables/preprocessing_report_no_roberta.md")).resolve()
-    if prep_report.name == "preprocessing_report.md":
-        prep_report = (base / "outputs/tables/preprocessing_report_no_roberta.md").resolve()
-    train_report = (base / reports.get("training_md", "outputs/tables/training_report_no_roberta.md")).resolve()
-    if train_report.name == "training_report.md":
-        train_report = (base / "outputs/tables/training_report_no_roberta.md").resolve()
+    input_dir = run_root / "inputs"
+    behaviour_csv = input_dir / "behaviour_dataset.csv"
+    stage08_enriched_csv = run_root / "08" / "enriched_behaviour.csv"
+    enriched_csv = run_root / "08b" / "enriched_behaviour.csv"
+    stage_dir = run_root / "08b"
+    if stage_dir.exists() and not args.resume_stage:
+        raise RuntimeError(f"Stage 08b output directory already exists for run {run_id!r}; use a new run ID")
+    reports_dir = stage_dir / "reports"
+    logs_dir = stage_dir / "logs"
+    cluster_dir = run_root / "shared" / "predictive_clusters_08b"
+    out_dir = stage_dir
+    split_path = run_root / "shared" / "split_manifest.json"
+    dao_feat = resolve_artifact_path(run_root, stage08_config.get("dao_feature_table", ""))
+    prep_report = reports_dir / "preprocessing_report.md"
+    train_report = reports_dir / "training_report.md"
+    if not behaviour_csv.is_file() or not stage08_enriched_csv.is_file() or not split_path.is_file():
+        raise FileNotFoundError("Stage 08 run is missing its input dataset, enriched dataset, or split manifest")
 
     use_dao = bool(bm.get("use_dao_clusters", True))
     use_voter = bool(bm.get("use_voter_clusters", True))
     min_votes = int(cfg.get("voter_clustering", {}).get("min_votes_per_voter_space", 5))
 
-    for d in (behaviour_csv.parent, out_dir, logs_dir, split_path.parent, prep_report.parent, train_report.parent, cluster_dir):
+    for d in (out_dir, logs_dir, prep_report.parent, train_report.parent, cluster_dir):
         d.mkdir(parents=True, exist_ok=True)
 
-    if not args.reuse_behaviour_csv or not behaviour_csv.exists():
-        _log_phase("building behaviour dataset CSV")
-        _, rep_b = build_behaviour_dataset(master_parquet, output_csv=behaviour_csv)
-        br_path = prep_report.parent / "behaviour_dataset_quality_no_roberta.md"
-        br_path.write_text(rep_b.to_markdown("Behaviour dataset (build)"), encoding="utf-8")
-    else:
-        print("[08b] Reusing existing behaviour CSV:", behaviour_csv)
+    print("[08b] Reusing Stage 08 dataset:", behaviour_csv)
 
     raw_df: pd.DataFrame | None = None
     train_frac = float(bm.get("train_frac", 0.7))
@@ -388,33 +388,24 @@ def main() -> None:
     window_size = int(bm.get("window", 5))
     upper_q = float(dq.get("upper_quantile_cap", 0.999))
     abs_cap = float(dq.get("absolute_cap", 1e18))
-    cache_dir = (base / args.window_cache_dir).resolve()
+    cache_dir = (run_root / args.window_cache_dir).resolve() if args.window_cache_dir else stage_dir / "window_cache"
+    if not cache_dir.is_relative_to(run_root):
+        raise ValueError("--window-cache-dir must resolve inside this run directory")
 
-    cache_csv = enriched_csv if enriched_csv.exists() else behaviour_csv
+    cache_csv = enriched_csv if enriched_csv.exists() else stage08_enriched_csv
     csv_bytes = cache_csv.stat().st_size if cache_csv.exists() else 0
     use_cache = args.reuse_split_manifest or csv_bytes > 1_000_000_000
     _assert_csv_schema(cache_csv, required=["voter", "space", "vote_ts", "label_id"])
 
     preprocessor: Dict[str, Any] | None = None
-    pre_path = _resolve_preprocessor_path(base, args.reuse_preprocessor_from)
+    pre_path = _resolve_preprocessor_path(base, args.reuse_preprocessor_from, stage08_config_path)
+    if pre_path is not None and pre_path.resolve() != stage08_config_path.resolve():
+        raise ValueError("08b must use the Stage 08 config from this run for preprocessing compatibility")
 
     if use_cache:
         _log_phase("using large-dataset cache mode")
         if not split_path.exists():
-            _log_phase("creating split manifest")
-            _log_phase("loading behaviour dataset")
-            raw_df = load_behaviour_votes(behaviour_csv)
-            tr, va, te = split_by_voter_three_way(raw_df, train_frac=train_frac, val_frac=val_frac, seed=seed)
-            save_split_manifest(
-                split_path,
-                train_voters=tr["voter"].unique(),
-                val_voters=va["voter"].unique(),
-                test_voters=te["voter"].unique(),
-                seed=seed,
-                train_frac=train_frac,
-                val_frac=val_frac,
-            )
-            print(f"[08b] Created split manifest: {split_path}")
+            raise FileNotFoundError(f"Stage 08 split manifest is missing: {split_path}")
 
         has_history_features = enriched_csv.exists() and _csv_has_columns(
             enriched_csv, ["prior_frac_for", "prior_frac_against"]
@@ -448,6 +439,7 @@ def main() -> None:
                 cluster_artifacts_dir=cluster_dir,
                 include_prior_vote_fractions=True,
             )
+            _assert_run_split(split_path, tr_a, va_a, te_a)
             write_enriched_behaviour_csv(tr_a, va_a, te_a, enriched_csv)
         elif pre_path is not None and pre_path.exists() and pre_path.is_file():
             preprocessor = existing_preprocessor
@@ -488,16 +480,7 @@ def main() -> None:
         train_raw, val_raw, test_raw = split_by_voter_three_way(
             raw_df, train_frac=train_frac, val_frac=val_frac, seed=seed
         )
-        save_split_manifest(
-            split_path,
-            train_voters=train_raw["voter"].unique(),
-            val_voters=val_raw["voter"].unique(),
-            test_voters=test_raw["voter"].unique(),
-            seed=seed,
-            train_frac=train_frac,
-            val_frac=val_frac,
-        )
-        print(f"[08b] Split manifest: {split_path}")
+        _assert_run_split(split_path, train_raw, val_raw, test_raw)
 
         _log_phase("preparing train/val/test splits and fitting structural clusters")
         train_df, val_df, test_df, preprocessor, cluster_bundle, tr_a, va_a, te_a = prepare_behaviour_splits(
@@ -660,6 +643,9 @@ def main() -> None:
     torch.save(model.state_dict(), out_dir / "model.pt")
 
     train_cfg: Dict[str, Any] = {
+        "run_id": run_id,
+        "sample_variant": sample_variant,
+        "run_root": ".",
         "model_type": "numeric_only_temporal",
         "use_roberta": False,
         "use_text": False,
@@ -668,7 +654,7 @@ def main() -> None:
         "best_valid_f1": float(best_f1),
         "label_map": {"FOR": 0, "AGAINST": 1, "ABSTAIN": 2},
         "numeric_preprocessor": preprocessor,
-        "split_manifest": str(split_path),
+        "split_manifest": split_path.relative_to(run_root).as_posix(),
         "train_frac": train_frac,
         "val_frac": val_frac,
         "seed": seed,
@@ -677,10 +663,13 @@ def main() -> None:
         "batch_size": batch_size,
         "epochs": epochs,
         "lr": lr,
-        "window_cache_dir": str(cache_dir) if use_cache else "",
+        "window_cache_dir": cache_dir.relative_to(run_root).as_posix() if use_cache else "",
         "leakage_safe": True,
         "numeric_columns": NUMERIC_COLUMNS,
-        "cluster_artifacts_dir": str(cluster_dir),
+        "cluster_artifacts_dir": cluster_dir.relative_to(run_root).as_posix(),
+        "enriched_behaviour_csv": enriched_csv.relative_to(run_root).as_posix(),
+        "behaviour_dataset_csv": behaviour_csv.relative_to(run_root).as_posix(),
+        "input_hashes": {name: record["sha256"] for name, record in manifest["inputs"].items()},
     }
     config_path = out_dir / "config.json"
     config_path.write_text(json.dumps(train_cfg, indent=2), encoding="utf-8")
@@ -692,7 +681,15 @@ def main() -> None:
         encoding="utf-8",
     )
 
-    comparison_path = write_comparison_csv(base, config_path, train_report)
+    comparison_path = write_comparison_csv(run_root, config_path, train_report)
+
+    record_stage(
+        run_root,
+        manifest,
+        "08b",
+        [out_dir, cluster_dir],
+        details={"seed": seed, "window": window_size, "numeric_columns": NUMERIC_COLUMNS},
+    )
 
     print(f"[08b] saved model to {out_dir}")
     print(f"[08b] training report: {train_report}")

@@ -2,26 +2,38 @@
 
 ## Purpose
 
-You will receive two Stage 08 export ZIPs: a **full run** and a **lean run**. Please analyse the trained behaviour models, diagnose them with explainable-AI (XAI) methods, and use the evidence to write the final report. This handover describes the intended models, the checks needed before analysis, and the expected report contents.
+You will receive two Stage 08 export ZIPs: a **full run** and a **lean run**. Each ZIP contains a paired Stage 08/08b run, run-matched evaluation, source/config provenance, and the data required for model analysis. Please analyse the trained behaviour models, diagnose them with explainable-AI (XAI) methods, and use the evidence to write the final report.
 
 The prediction target is a voter's next recorded choice: `FOR`, `AGAINST`, or `ABSTAIN`. This is predictive modelling, not a causal analysis of why a voter chose an option.
 
 ## First: verify that each ZIP is self-consistent
 
-The ZIPs should contain a top-level `stage08_08b_<TAG>/` directory, with the following run-matched artifacts:
+Each ZIP should contain a top-level `stage08_08b_<VARIANT>_<RUN_ID>/` directory. The directory is copied from one immutable run root, not assembled from shared “latest” paths:
 
-| Contents | Stage 08: RoBERTa model | Stage 08b: numeric-only model |
-|---|---|---|
-| Model files | `08/behaviour_agent2/model.pt`, `config.json`, and `tokenizer/` | `08b/agent2_artifacts_no_roberta/model.pt` and `config.json` |
-| Data/split | `08/split_manifest.json` and `outputs/tables/behaviour_dataset_with_clusters_08_<TAG>.csv` | `outputs/tables/behaviour_dataset_with_clusters_08b_<TAG>.csv`; matching split manifest |
-| Training/preprocessing evidence | `08/training_report.md`, `08/preprocessing_report.md` | `08b/training_report_no_roberta.md`, `08b/preprocessing_report_no_roberta.md` |
-| Helpful supporting files | `08/predictive_clusters/` | `08b/roberta_vs_no_roberta_comparison.csv`; optional window cache if explicitly included |
+| Directory | Required contents |
+|---|---|
+| Run root | `run_manifest.json`, `config/resolved.yaml`, `config/data_sources.yaml`, and `export_manifest.json` |
+| `inputs/` | The behavior dataset used by both models and the DAO feature-table snapshot; the manifest records the authoritative cleaned-parquet path and hash |
+| `shared/` | The voter `split_manifest.json` and Stage 08 train-fitted cluster artifacts |
+| `08/` | `model.pt`, `config.json`, exact `tokenizer/`, Stage 08 enriched dataset, reports, and epoch logs |
+| `08b/` | Numeric-only `model.pt`, `config.json`, its causal-history enriched dataset, reports, logs, within-run training comparison, and run-keyed window cache when materialized |
+| `evaluation/08/test/` and `evaluation/08b/test/` | Matched held-out test predictions, metrics, per-class tables, confusion matrices, calibration outputs, and cluster-stratified metrics |
+| `evaluation/reports/` | Evaluation summary and within-run 08-versus-08b comparison |
 
-Both model configs should agree with the intended run's sample, feature schema, label mapping, window size, preprocessing, and split. The 08b run should reuse the Stage 08 split for that same full or lean sample. Check file sizes and timestamps as well as names; a matching filename alone does not prove that files came from the same run. Record each archive's tag, source commit, and any recorded run/config metadata.
+The manifest records the run ID, sample variant, resolved-config hash, configured input hashes, Git revision/worktree state, runtime versions, and hashes/sizes for recorded artifacts. Model configs use paths relative to the run root. The exporter rejects missing, changed, or incomplete recorded artifacts and refuses to overwrite an existing ZIP. Check the run ID, variant, source commit, and manifest before analysis.
 
-**Important packaging limitation:** `scripts/export_stage08_run.sh` uses `TAG` to name the bundle and locate tagged CSV snapshots, but its model, cluster, split, report, and comparison-file source paths are fixed to the default (full-run) locations. It does not select the `_lean` artifact paths based on the tag. It also does not include Stage 09 test/validation evaluation reports. Therefore, do not assume the `lean` ZIP contains lean model artifacts, or treat training reports as held-out test results. If an archive lacks a model/config/data/split set that agrees internally, pause analysis and request a corrected export with matching run-specific artifacts.
+Export only after both models and paired Stage 09 evaluation have completed. The default exporter requires all three stages (`08`, `08b`, `evaluation`) and verifies recorded hashes. For an intentional model-only handoff, `--allow-without-evaluation` is available, but that bundle is not sufficient for the primary held-out performance analysis below.
 
-For final performance analysis, request the Stage 09 **test-split** outputs for each run if they are not supplied separately. Ideally include `metrics_summary.json`, `metrics_report.md`, `per_class_metrics.csv` or `classification_report.csv`, confusion-matrix counts, calibration/reliability outputs, and cluster-stratified metrics. Preserve the matching split manifest and source dataset with each run.
+Reproduce the paired full and lean runs with separate IDs, for example:
+
+```bash
+./run_all.sh configs/default.yaml configs/data_sources.yaml full_20261008_a
+./run_all.sh configs/default.yaml configs/data_sources_lean.yaml lean_20261008_a
+./scripts/export_stage08_run.sh outputs/stage08_runs/full/full_20261008_a /tmp/exports
+./scripts/export_stage08_run.sh outputs/stage08_runs/lean/lean_20261008_a /tmp/exports
+```
+
+Stage 09 evaluates both architectures against the same run’s saved test voters and writes outputs under `evaluation/08/test/` and `evaluation/08b/test/`. Training reports remain validation evidence, not held-out test results.
 
 ## What “full”, “lean”, and “08b” mean
 

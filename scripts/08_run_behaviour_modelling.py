@@ -6,7 +6,8 @@ Leakage-safe flow: split -> train-only structural clusters -> causal windows.
 
   cd whole_pipeline
   set PYTHONPATH=src
-  python scripts/08_run_behaviour_modelling.py --config configs/default.yaml
+    python scripts/08_run_behaviour_modelling.py --config configs/default.yaml \\
+            --data-sources-config configs/data_sources.yaml --run-id full_trial_01
 """
 from __future__ import annotations
 
@@ -44,6 +45,15 @@ from dao_governance.modelling.preprocess import (
     select_numeric_columns,
     split_by_voter_three_way,
 )
+from dao_governance.modelling.run_artifacts import (
+    create_run,
+    record_input,
+    record_stage,
+    resolve_run_root,
+    resolve_stage_inputs,
+    verify_recorded_artifacts,
+    verify_run_identity,
+)
 from dao_governance.modelling.windows import build_windows
 from dao_governance.settings import load_config, project_root
 
@@ -53,18 +63,6 @@ def compute_class_weights(y: np.ndarray, num_classes: int = 3) -> torch.Tensor:
     n = counts.sum()
     w = n / (num_classes * np.maximum(counts, 1.0))
     return torch.tensor(w, dtype=torch.float32)
-
-
-def _resolve_master_parquet(base: Path, paths: dict) -> Path:
-    cleaned = (base / paths.get("cleaned_master_parquet", "data/processed/votes_cleaned.parquet")).resolve()
-    if cleaned.exists():
-        return cleaned
-    merged = (base / paths.get("master_with_dao_parquet", "data/processed/master_votes_with_dao_cluster.parquet")).resolve()
-    if merged.exists():
-        return merged
-    raise FileNotFoundError(
-        f"Need cleaned or master votes parquet. Tried: {cleaned}, {merged}. Run stages 02–03 / 07."
-    )
 
 
 def _log_phase(message: str) -> None:
@@ -105,7 +103,10 @@ def _assert_reusable_behaviour_csv(behaviour_csv: Path, *, text_mode: str) -> No
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", type=str, default="configs/default.yaml")
+    ap.add_argument("--data-sources-config", type=str, default="configs/data_sources.yaml")
     ap.add_argument("--extra-config", type=str, default="")
+    ap.add_argument("--run-id", required=True, help="Unique immutable identifier for this full/lean 08+08b run.")
+    ap.add_argument("--resume-run", action="store_true", help="Resume an incomplete Stage 08 run after identity checks.")
     ap.add_argument("--reuse-behaviour-csv", action="store_true", help="Skip rebuilding behaviour CSV if it exists.")
     ap.add_argument("--save-behaviour-copy", nargs="?", const="", default=None, metavar="TAG",
                     help="Save a byte-for-byte copy as behaviour_dataset_with_clusters_08_[TAG].csv.")
@@ -114,8 +115,13 @@ def main() -> None:
     _log_phase("starting behaviour modelling run")
     base = project_root()
     cfg_path = (base / args.config).resolve() if not Path(args.config).is_absolute() else Path(args.config)
+    data_sources_cfg_path = (
+        (base / args.data_sources_config).resolve()
+        if not Path(args.data_sources_config).is_absolute()
+        else Path(args.data_sources_config).resolve()
+    )
     extra = (base / args.extra_config).resolve() if args.extra_config else None
-    cfg = load_config(config_path=cfg_path, extra_path=extra)
+    cfg = load_config(config_path=cfg_path, extra_path=extra, data_sources_path=data_sources_cfg_path)
     _log_phase(f"loaded config from {cfg_path}")
 
     seed = int(cfg.get("project", {}).get("seed", 42))
@@ -131,19 +137,63 @@ def main() -> None:
     dq = cfg.get("data_quality", {})
     vc = cfg.get("voter_clustering", {})
 
-    behaviour_csv = (base / paths.get("behaviour_dataset_csv", "outputs/tables/behaviour_dataset.csv")).resolve()
-    enriched_csv = behaviour_csv.with_name("behaviour_dataset_with_clusters.csv")
-    master_parquet = _resolve_master_parquet(base, paths)
-    dao_feat = (base / paths.get("dao_feature_table_csv", "data/processed/dao_feature_table.csv")).resolve()
-    if not dao_feat.exists():
-        dao_feat = (base / paths.get("dao_feature_table_parquet", "data/processed/dao_feature_table.parquet")).resolve()
+    run_id = args.run_id.strip()
+    sample_variant = str((cfg.get("run") or {}).get("sample_variant", "full")).strip().lower()
+    run_root = resolve_run_root(base, cfg, run_id)
+    configured_inputs = resolve_stage_inputs(base, cfg)
+    configured_behaviour_csv = (base / paths.get("behaviour_dataset_csv", "outputs/tables/behaviour_dataset.csv")).resolve()
+    if args.reuse_behaviour_csv and configured_behaviour_csv.is_file():
+        _assert_reusable_behaviour_csv(configured_behaviour_csv, text_mode=str(bm.get("text_mode", "title")))
+        configured_inputs["reused_behaviour_dataset"] = configured_behaviour_csv
+    source_config_path = data_sources_cfg_path
+    if run_root.exists():
+        if not args.resume_run:
+            raise FileExistsError(f"Run directory already exists: {run_root}; choose a new run ID or use --resume-run")
+        manifest = verify_run_identity(
+            run_root,
+            run_id=run_id,
+            sample_variant=sample_variant,
+            config=cfg,
+            input_paths=configured_inputs,
+        )
+        if "08" in manifest.get("stages", {}):
+            raise RuntimeError(f"Stage 08 is already recorded for run {run_id!r}; use a new run ID")
+        verify_recorded_artifacts(run_root, manifest)
+    else:
+        manifest = create_run(
+            run_root,
+            run_id=run_id,
+            sample_variant=sample_variant,
+            config=cfg,
+            config_path=cfg_path,
+            extra_config_path=extra,
+            input_paths=configured_inputs,
+            data_sources_config_path=source_config_path,
+        )
 
-    cluster_dir = (base / paths.get("predictive_cluster_artifacts_dir", "outputs/models/predictive_clusters")).resolve()
-    out_dir = (base / paths.get("model_artifacts_dir", "outputs/models/behaviour_agent2")).resolve()
-    logs_dir = (base / paths.get("logs_dir", "outputs/logs")).resolve()
-    split_path = (base / paths.get("split_manifest_json", "outputs/processed/split_manifest.json")).resolve()
-    prep_report = (base / (cfg.get("reports") or {}).get("preprocessing_md", "outputs/tables/preprocessing_report.md")).resolve()
-    train_report = (base / (cfg.get("reports") or {}).get("training_md", "outputs/tables/training_report.md")).resolve()
+    input_dir = run_root / "inputs"
+    stage_dir = run_root / "08"
+    reports_dir = stage_dir / "reports"
+    logs_dir = stage_dir / "logs"
+    cluster_dir = run_root / "shared" / "predictive_clusters"
+    behaviour_csv = input_dir / "behaviour_dataset.csv"
+    enriched_csv = stage_dir / "enriched_behaviour.csv"
+    master_parquet = configured_inputs["cleaned_master_parquet"]
+    source_dao_feat = configured_inputs["dao_feature_table"]
+    dao_feat = input_dir / f"dao_feature_table{source_dao_feat.suffix}"
+    split_path = run_root / "shared" / "split_manifest.json"
+    out_dir = stage_dir
+    prep_report = reports_dir / "preprocessing_report.md"
+    train_report = reports_dir / "training_report.md"
+    quality_report = reports_dir / "behaviour_dataset_quality.md"
+    run_stage_report = reports_dir / "stage08_behaviour_modelling.md"
+    input_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source_dao_feat, dao_feat)
+    if "reused_behaviour_dataset" in configured_inputs:
+        shutil.copy2(configured_inputs["reused_behaviour_dataset"], behaviour_csv)
+        source_meta = _behaviour_csv_meta_path(configured_inputs["reused_behaviour_dataset"])
+        if source_meta.is_file():
+            shutil.copy2(source_meta, _behaviour_csv_meta_path(behaviour_csv))
 
     use_dao = bool(bm.get("use_dao_clusters", True))
     use_voter = bool(bm.get("use_voter_clusters", True))
@@ -155,17 +205,17 @@ def main() -> None:
     for d in (behaviour_csv.parent, out_dir, logs_dir, split_path.parent, prep_report.parent, cluster_dir):
         d.mkdir(parents=True, exist_ok=True)
 
-    if not args.reuse_behaviour_csv or not behaviour_csv.exists():
+    if not behaviour_csv.exists():
         _log_phase("building behaviour dataset CSV")
         _, rep_b = build_behaviour_dataset(
             master_parquet, output_csv=behaviour_csv, text_mode=text_mode
         )
         _write_behaviour_csv_meta(_behaviour_csv_meta_path(behaviour_csv), text_mode=text_mode)
-        br_path = prep_report.parent / "behaviour_dataset_quality.md"
-        br_path.write_text(rep_b.to_markdown("Behaviour dataset (build)"), encoding="utf-8")
+        quality_report.write_text(rep_b.to_markdown("Behaviour dataset (build)"), encoding="utf-8")
     else:
         _assert_reusable_behaviour_csv(behaviour_csv, text_mode=text_mode)
         print("[08] Reusing existing behaviour CSV:", behaviour_csv)
+    record_input(run_root, manifest, "behaviour_dataset", behaviour_csv)
 
     _log_phase("loading behaviour dataset")
     raw_df = load_behaviour_votes(behaviour_csv)
@@ -204,8 +254,9 @@ def main() -> None:
     _log_phase("writing enriched behaviour CSV")
     write_enriched_behaviour_csv(tr_a, va_a, te_a, enriched_csv)
     print(f"[08] Enriched behaviour CSV (clusters): {enriched_csv}")
+    behaviour_copy = None
     if args.save_behaviour_copy is not None:
-        _save_behaviour_copy(enriched_csv, args.save_behaviour_copy)
+        behaviour_copy = _save_behaviour_copy(enriched_csv, args.save_behaviour_copy)
 
     prep_report.write_text(
         "# Preprocessing report\n\n"
@@ -352,16 +403,21 @@ def main() -> None:
         "best_valid_f1": float(best_f1),
         "label_map": {"FOR": 0, "AGAINST": 1, "ABSTAIN": 2},
         "numeric_preprocessor": preprocessor,
-        "split_manifest": str(split_path),
+        "split_manifest": split_path.relative_to(run_root).as_posix(),
         "train_frac": train_frac,
         "val_frac": val_frac,
         "seed": seed,
+        "run_id": run_id,
+        "sample_variant": sample_variant,
+        "run_root": ".",
         "leakage_safe": True,
         "numeric_columns": select_numeric_columns(),
-        "cluster_artifacts_dir": str(cluster_dir),
+        "cluster_artifacts_dir": cluster_dir.relative_to(run_root).as_posix(),
+        "dao_feature_table": dao_feat.relative_to(run_root).as_posix(),
         "use_dao_clusters": use_dao,
         "use_voter_clusters": use_voter,
-        "enriched_behaviour_csv": str(enriched_csv),
+        "enriched_behaviour_csv": enriched_csv.relative_to(run_root).as_posix(),
+        "input_hashes": {name: record["sha256"] for name, record in manifest["inputs"].items()},
     }
     (out_dir / "config.json").write_text(json.dumps(train_cfg, indent=2), encoding="utf-8")
 
@@ -371,9 +427,7 @@ def main() -> None:
         + f"\n\nBest validation macro-F1: **{best_f1:.4f}**\n",
         encoding="utf-8",
     )
-    st8 = (base / (cfg.get("reports") or {}).get("stage08_md", "outputs/reports/stage08_behaviour_modelling.md")).resolve()
-    st8.parent.mkdir(parents=True, exist_ok=True)
-    st8.write_text(
+    run_stage_report.write_text(
         "\n".join(
             [
                 "# Stage 8 — Behaviour modelling (leakage-safe)",
@@ -388,6 +442,13 @@ def main() -> None:
             ]
         ),
         encoding="utf-8",
+    )
+    record_stage(
+        run_root,
+        manifest,
+        "08",
+        [out_dir, cluster_dir, split_path, input_dir],
+        details={"seed": seed, "window": window_size, "text_mode": text_mode},
     )
     _log_phase("finished behaviour modelling run")
     print(f"[08] saved model to {out_dir}")

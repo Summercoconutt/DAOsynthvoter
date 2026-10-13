@@ -15,18 +15,11 @@ This branch trains a **numeric-only** voter-choice model to compare against the 
 
 Stage 08 may use either title-only or title-plus-body text (`behaviour_model.text_mode`). Record that setting with comparison results: 08b intentionally receives no proposal text, while it receives causal prior FOR/AGAINST fractions to retain non-text vote-history information.
 
-## Prerequisites (should already exist from stage 08)
+## Paired run inputs
 
-On the server, after the student’s RoBERTa run:
+The full or lean data-source YAML is authoritative for the cleaned vote parquet and DAO feature table. Stage 08 snapshots those inputs and creates the shared voter split; Stage 08b must use that same run ID and split.
 
-| Artifact | Default path (relative to `whole_pipeline/`) |
-|----------|---------------------------------------------|
-| Behaviour dataset CSV | `outputs/tables/behaviour_dataset.csv` |
-| Train/val/test split | `outputs/processed/split_manifest.json` |
-| RoBERTa model + config | `outputs/models/behaviour_agent2/` |
-| RoBERTa training report | `outputs/tables/training_report.md` |
-
-The No-RoBERTa script reuses the same voter split. It fits its own preprocessor once because it adds two causal historical-choice features that Stage 08 does not use.
+Choose a distinct run ID for every experiment. Full and lean artifacts are kept under separate variant folders.
 
 ## Environment
 
@@ -41,64 +34,73 @@ export PYTHONPATH=src
 
 GPU is recommended for training (~23M train windows). CPU works but may take days.
 
-## Full-data training (production)
+## Full-data paired training (production)
 
 ```bash
 cd whole_pipeline
 export PYTHONPATH=src
 
+RUN_ID="full_20261008_a"
+python scripts/08_run_behaviour_modelling.py \
+  --config configs/default.yaml \
+  --data-sources-config configs/data_sources.yaml \
+  --run-id "$RUN_ID"
 python scripts/08b_run_behaviour_modelling_no_roberta.py \
   --config configs/default.yaml \
-  --reuse-behaviour-csv \
+  --data-sources-config configs/data_sources.yaml \
+  --run-id "$RUN_ID" \
   --reuse-split-manifest
+python scripts/09_run_behaviour_evaluation.py \
+  --config configs/default.yaml \
+  --data-sources-config configs/data_sources.yaml \
+  --run-id "$RUN_ID" \
+  --split test
+./scripts/export_stage08_run.sh "outputs/stage08_runs/full/$RUN_ID" /tmp/exports
 ```
 
 **What this does**
 
-1. Skips rebuilding `behaviour_dataset.csv` if it already exists.
-2. Uses existing `split_manifest.json` (does not reload the full 47GB CSV into RAM).
-3. Builds causal `prior_frac_for` and `prior_frac_against` inputs from earlier votes in the same `(voter, space)` sequence; abstentions remain in the denominator.
-4. Fits and saves an 08b-specific numeric preprocessor, then builds a **memmap window cache** under `outputs/behaviour_modelling/window_cache_no_roberta/` (one-time; ~6GB on disk).
-5. Trains `NumericOnlyTimeSeriesClassifier` for 4 epochs (`window=5`, `batch_size=16`, `numeric_only_lr=1e-3`).
-6. Writes comparison CSV vs RoBERTa.
+1. Validates and consumes the behavior dataset, DAO feature table, and split recorded by Stage 08 for this run.
+2. Builds causal `prior_frac_for` and `prior_frac_against` inputs from earlier votes in the same `(voter, space)` sequence; abstentions remain in the denominator.
+3. Fits the 08b-specific numeric preprocessor and stores any **memmap window cache** under this run’s `08b/window_cache/` directory.
+4. Trains `NumericOnlyTimeSeriesClassifier` for 4 epochs (`window=5`, `batch_size=16`, `numeric_only_lr=1e-3`).
+5. Writes run-local training/preprocessing reports and a validation comparison against the paired Stage 08 model.
 
 The 08b tensor has `feat_dim=10`: six numeric/history inputs plus four time encodings.
 
-### If window cache is already built but training failed
+### If window-cache training was interrupted
 
 ```bash
 python scripts/08b_run_behaviour_modelling_no_roberta.py \
   --config configs/default.yaml \
-  --reuse-behaviour-csv \
+  --data-sources-config configs/data_sources.yaml \
+  --run-id full_20261008_a \
+  --resume-stage \
   --reuse-split-manifest \
   --reuse-window-cache
 ```
 
-The cache stores its numeric-column schema and window size. Delete or rematerialize `outputs/behaviour_modelling/window_cache_no_roberta/` after this upgrade; older caches have eight features per step, while the updated 08b cache has ten.
+The cache records hashes for its source dataset, split manifest, and fitted preprocessor as well as its numeric schema and window size. A mismatch is rejected. `--resume-stage` is only for an interrupted stage in the same run; it cannot rerun a completed 08b stage.
 
 ### Quick smoke test (small subset)
 
 ```bash
+RUN_ID="smoke_no_roberta_01"
+python scripts/08_run_behaviour_modelling.py \
+  --config configs/default.yaml \
+  --data-sources-config configs/data_sources.yaml \
+  --extra-config configs/smoke_behaviour.yaml \
+  --run-id "$RUN_ID"
 python scripts/08b_run_behaviour_modelling_no_roberta.py \
   --config configs/default.yaml \
-  --extra-config configs/smoke_no_roberta.yaml \
-  --reuse-behaviour-csv \
-  --max-train-windows 320 \
-  --max-valid-windows 96
+  --data-sources-config configs/data_sources.yaml \
+  --extra-config configs/smoke_behaviour.yaml \
+  --run-id "$RUN_ID"
 ```
 
-## Outputs (all names contain `_no_roberta`)
+## Outputs
 
-| Output | Path |
-|--------|------|
-| Model weights | `outputs/behaviour_modelling/agent2_artifacts_no_roberta/model.pt` |
-| Config | `outputs/behaviour_modelling/agent2_artifacts_no_roberta/config.json` |
-| Training report | `outputs/tables/training_report_no_roberta.md` |
-| Preprocessing report | `outputs/tables/preprocessing_report_no_roberta.md` |
-| Confusion matrices | `outputs/logs/no_roberta_confusion_valid_epoch*.csv` |
-| **RoBERTa vs No-RoBERTa CSV** | `outputs/tables/roberta_vs_no_roberta_comparison.csv` |
-
-The comparison CSV reads RoBERTa metrics from `outputs/tables/training_report.md` or `outputs/models/behaviour_agent2/config.json` — **no RoBERTa retraining required**.
+All outputs are under `outputs/stage08_runs/<variant>/<run-id>/`. The `08b/` subdirectory contains numeric-only weights/config, enriched data, reports, logs, validation comparison, and cache; `evaluation/08b/test/` contains held-out test outputs. `evaluation/reports/within_run_model_comparison.csv` compares both models on the same test split.
 
 ## Expected scale (full dataset)
 
@@ -121,8 +123,8 @@ Window cache build: ~1–3 hours (depends on disk). Training: GPU strongly recom
 
 | Symptom | Fix |
 |---------|-----|
-| `split_manifest.json` not found | Run stage 08 (RoBERTa) first, or copy manifest from prior run |
-| DuckDB CSV parse errors | Already handled via `strict_mode=false`; ensure CSV path in `configs/default.yaml` |
+| Stage 08 run or split not found | Run Stage 08 first with the same source YAML and run ID |
+| DuckDB CSV parse errors | Already handled via `strict_mode=false`; check the run-local enriched CSV |
 | OOM during cache build | Ensure enough disk (~10GB) for memmap; RAM can stay low thanks to streaming |
 | Training very slow | Use CUDA; reduce epochs in config for a trial run |
 
@@ -130,6 +132,5 @@ Window cache build: ~1–3 hours (depends on disk). Training: GPU strongly recom
 
 Please share:
 
-1. `outputs/tables/roberta_vs_no_roberta_comparison.csv`
-2. `outputs/tables/training_report_no_roberta.md`
-3. `outputs/behaviour_modelling/agent2_artifacts_no_roberta/config.json`
+1. The full or lean Stage 08 export ZIP produced by `scripts/export_stage08_run.sh`
+2. `run_manifest.json` and the paired test outputs under `evaluation/`

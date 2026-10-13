@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Reproducible pipeline: stages 01-08, numeric-only ablation, then evaluation.
-# Usage: ./run_all.sh [config] [extra-config]
+# Usage: ./run_all.sh [config] [data-sources-config] [run-id]
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -8,32 +8,26 @@ cd "$ROOT"
 export PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
 
 CONFIG="${1:-configs/default.yaml}"
-EXTRA_CONFIG="${2:-}"
-COMMON_ARGS=(--config "$CONFIG")
-if [[ -n "$EXTRA_CONFIG" ]]; then
-  COMMON_ARGS+=(--extra-config "$EXTRA_CONFIG") # Optional: server paths, title_body, or lean-data override.
-fi
+DATA_SOURCES_CONFIG="${2:-configs/data_sources.yaml}"
+RUN_ID="${3:-run_$(date -u +%Y%m%dT%H%M%SZ)}"
+PIPELINE_ARGS=(--config "$CONFIG" --extra-config "$DATA_SOURCES_CONFIG")
+STAGE08_ARGS=(--config "$CONFIG" --data-sources-config "$DATA_SOURCES_CONFIG")
+printf '[run_all] Stage 08/08b run ID: %s\n' "$RUN_ID"
 
 # Optional preflight: uncomment --skip-raw-scan when raw archives are unavailable locally.
 # python scripts/10_run_detection_mode.py "${COMMON_ARGS[@]}" --skip-raw-scan
 
-# python scripts/01_run_data_selection.py "${COMMON_ARGS[@]}" # Optional: omit if selected_spaces.json already exists.
-# python scripts/02_run_data_expansion.py "${COMMON_ARGS[@]}" # Optional: omit when a merged vote parquet is already configured.
-python scripts/03_run_global_cleaning.py "${COMMON_ARGS[@]}" # Enable cleaning.lean_sample only in an explicit experimental override.
-python scripts/04_run_dao_metrics.py "${COMMON_ARGS[@]}" # Required by Stage 08 structural DAO clustering.
-# python scripts/05_run_feature_selection.py "${COMMON_ARGS[@]}" # Exploratory DAO analysis; not required for Stage 08.
-# python scripts/06_run_dao_clustering.py "${COMMON_ARGS[@]}" # Exploratory DAO analysis; not required for Stage 08.
-# python scripts/07_run_voter_clustering.py "${COMMON_ARGS[@]}" # Exploratory voter analysis; not required for Stage 08.
+# python scripts/01_run_data_selection.py "${PIPELINE_ARGS[@]}" # Optional: omit if selected_spaces.json already exists.
+# python scripts/02_run_data_expansion.py "${PIPELINE_ARGS[@]}" # Optional: omit when a merged vote parquet is already configured.
+# python scripts/03_run_global_cleaning.py "${PIPELINE_ARGS[@]}" # Enable cleaning.lean_sample only in an explicit experimental override.
+# python scripts/04_run_dao_metrics.py "${PIPELINE_ARGS[@]}" # Required by Stage 08 structural DAO clustering.
+# python scripts/05_run_feature_selection.py "${PIPELINE_ARGS[@]}" # Exploratory DAO analysis; not required for Stage 08.
+# python scripts/06_run_dao_clustering.py "${PIPELINE_ARGS[@]}" # Exploratory DAO analysis; not required for Stage 08.
+# python scripts/07_run_voter_clustering.py "${PIPELINE_ARGS[@]}" # Exploratory voter analysis; not required for Stage 08.
 # Stage 08 and Stage 08b are always run in sequence for the BERT ablation study.
 # 08 trains the full RoBERTa + numeric + cluster model; 08b trains the same setup without RoBERTa.
 # Keep the dataset and split identical between the two runs; only the BERT inclusion changes.
-# --reuse-behaviour-csv reuses the same behaviour_dataset.csv when the text mode metadata still matches.
-# --reuse-split-manifest reuses the same train/val/test voter split from 08, which is important for fair comparison.
-# --save-behaviour-copy is optional: it makes a snapshot of the enriched CSV for audit/comparison, e.g.
-#   --save-behaviour-copy full_ref or --save-behaviour-copy full_no_roberta.
-# Use --reuse-window-cache only after confirming the 08b cache schema matches the current run.
-python scripts/08_run_behaviour_modelling.py "${COMMON_ARGS[@]}" # Full-reference run for the BERT ablation study.
-python scripts/08b_run_behaviour_modelling_no_roberta.py "${COMMON_ARGS[@]}" --reuse-behaviour-csv --reuse-split-manifest # Ablation of 08: same data/split, no RoBERTa.
-# When running lean: set paths.model_artifacts_dir_no_roberta and pass --window-cache-dir in EXTRA_CONFIG/CLI to avoid overwriting full-data 08b outputs.
-# The same order still applies on the lean dataset: run 08 first, then 08b immediately afterward for a consistent ablation.
-python scripts/09_run_behaviour_evaluation.py "${COMMON_ARGS[@]}" --split test # Replace test with val for validation metrics.
+# The run ID isolates every generated file. 08b consumes the exact 08 dataset and split.
+python scripts/08_run_behaviour_modelling.py "${STAGE08_ARGS[@]}" --run-id "$RUN_ID" --resume-run
+python scripts/08b_run_behaviour_modelling_no_roberta.py "${STAGE08_ARGS[@]}" --run-id "$RUN_ID"
+python scripts/09_run_behaviour_evaluation.py "${STAGE08_ARGS[@]}" --run-id "$RUN_ID" --split test val

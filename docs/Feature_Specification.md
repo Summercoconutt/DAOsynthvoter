@@ -170,8 +170,9 @@ Built by `build_behaviour_dataset()` — **no cluster merge by default**.
 
 **Outputs:**
 
-- `outputs/tables/behaviour_dataset.csv` — base table  
-- `outputs/tables/behaviour_dataset_with_clusters.csv` — after train-only assign (for 08b cache / Stage 09 eval)
+- `outputs/stage08_runs/<variant>/<run-id>/inputs/behaviour_dataset.csv` — base table shared by the paired models
+- `outputs/stage08_runs/<variant>/<run-id>/08/enriched_behaviour.csv` — after train-only Stage 08 assignment
+- `outputs/stage08_runs/<variant>/<run-id>/08b/enriched_behaviour.csv` — Stage 08b causal-history enrichment
 
 ### 6.1 Optional lean proposal sample
 
@@ -238,9 +239,9 @@ Legacy label-heavy list `EXPLORATORY_LABEL_FEATURE_COLS` (not used for predictiv
 | 6. Build windows | — | Per-split dataframes |
 | 7. Train model | RoBERTa + temporal head | Train windows only |
 
-Manifest: `outputs/processed/split_manifest.json`  
-Cluster artifact: `outputs/models/predictive_clusters/cluster_bundle.pkl`  
-Model config: `outputs/models/behaviour_agent2/config.json` (`feat_dim`, `enriched_behaviour_csv`)
+Manifest: `outputs/stage08_runs/<variant>/<run-id>/shared/split_manifest.json`
+Cluster artifact: `outputs/stage08_runs/<variant>/<run-id>/shared/predictive_clusters/cluster_bundle.pkl`
+Model configs: `outputs/stage08_runs/<variant>/<run-id>/{08,08b}/config.json` (`feat_dim`, relative `enriched_behaviour_csv`)
 
 ---
 

@@ -17,10 +17,13 @@ $env:PYTHONPATH = "src"
 # - data/processed/dao_feature_table.csv  (stage 04)
 
 python scripts/10_run_detection_mode.py --skip-raw-scan
-python scripts/08_run_behaviour_modelling.py --config configs/default.yaml
-python scripts/08b_run_behaviour_modelling_no_roberta.py --config configs/default.yaml
-python scripts/09_run_behaviour_evaluation.py --config configs/default.yaml --split test
+python scripts/08_run_behaviour_modelling.py --config configs/default.yaml --data-sources-config configs/data_sources.yaml --run-id full_20261008_a
+python scripts/08b_run_behaviour_modelling_no_roberta.py --config configs/default.yaml --data-sources-config configs/data_sources.yaml --run-id full_20261008_a
+python scripts/09_run_behaviour_evaluation.py --config configs/default.yaml --data-sources-config configs/data_sources.yaml --run-id full_20261008_a --split test
+./scripts/export_stage08_run.sh outputs/stage08_runs/full/full_20261008_a /tmp/exports
 ```
+
+For the lean sample, use `--data-sources-config configs/data_sources_lean.yaml` for all three commands and a distinct run ID. Add a separate `--extra-config` only for model/cleaning overrides. A run ID is immutable: every model, split, dataset, cache, report, and evaluation output is stored beneath `outputs/stage08_runs/<variant>/<run-id>/`. Stage 08b verifies and reuses the Stage 08 dataset and split; do not copy or regenerate either between the paired runs.
 
 ## What changed
 
@@ -35,11 +38,12 @@ python scripts/09_run_behaviour_evaluation.py --config configs/default.yaml --sp
 
 ## Outputs
 
-- `outputs/tables/behaviour_dataset.csv` — vote-level, no clusters
-- `outputs/tables/behaviour_dataset_with_clusters.csv` — train-only cluster IDs (for 08b cache)
-- `outputs/models/predictive_clusters/cluster_bundle.pkl` — fitted models
-- `outputs/processed/split_manifest.json` — voter split
-- `outputs/models/behaviour_agent2/config.json` — includes `enriched_behaviour_csv` for Stage 09
+- `outputs/stage08_runs/<variant>/<run-id>/run_manifest.json` — source hashes, config/runtime provenance, and artifact inventory
+- `inputs/behaviour_dataset.csv` — common vote-level Stage 08/08b model input
+- `shared/split_manifest.json` and `shared/predictive_clusters/` — paired split and fitted Stage 08 clusters
+- `08/` and `08b/` — separate model weights, configs, enriched datasets, reports, and logs
+- `evaluation/08/test/` and `evaluation/08b/test/` — held-out test predictions, metrics, calibration, and subgroup reports
+- `evaluation/reports/within_run_model_comparison.csv` — paired held-out comparison
 
 ## Config (`configs/default.yaml`)
 
@@ -63,7 +67,8 @@ Run Stage 08 first to create the matching split manifest and enriched CSV. Stage
 
 ```powershell
 python scripts/08b_run_behaviour_modelling_no_roberta.py --config configs/default.yaml `
+  --data-sources-config configs/data_sources.yaml --run-id full_20261008_a `
   --reuse-split-manifest --reuse-window-cache
 ```
 
-Delete `outputs/behaviour_modelling/window_cache_no_roberta/` after code changes to force cache rebuild.
+The cache is under that run’s `08b/window_cache/`; reuse is accepted only when dataset, split, preprocessor, feature schema, and window-size hashes match. Start a new run ID after changing source data or modelling code.

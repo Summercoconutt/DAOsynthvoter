@@ -96,7 +96,8 @@ python scripts/04_run_dao_metrics.py --config configs/default.yaml
 **RoBERTa main model:**
 
 ```bash
-python scripts/08_run_behaviour_modelling.py --config configs/default.yaml
+RUN_ID="full_20261008_a"
+python scripts/08_run_behaviour_modelling.py --config configs/default.yaml --data-sources-config configs/data_sources.yaml --run-id "$RUN_ID"
 ```
 
 To append the existing proposal body to each title, merge an override containing:
@@ -111,21 +112,20 @@ behaviour_model:
 **Numeric-only baseline (no RoBERTa, for comparison):**
 
 ```bash
-python scripts/08b_run_behaviour_modelling_no_roberta.py --config configs/default.yaml
+python scripts/08b_run_behaviour_modelling_no_roberta.py --config configs/default.yaml --data-sources-config configs/data_sources.yaml --run-id "$RUN_ID"
 ```
 
 See `docs/SUPERVISOR_NO_ROBERTA_RUNBOOK.md` for 08b details.
 
 ### 4.4 Post-training evaluation (Stage 09)
 
-Uses the **same voter split** as training (`outputs/processed/split_manifest.json`):
+Evaluates both models using the **same run-scoped voter split**:
 
 ```bash
-python scripts/09_run_behaviour_evaluation.py --config configs/default.yaml --split test
-python scripts/09_run_behaviour_evaluation.py --config configs/default.yaml --split val
+python scripts/09_run_behaviour_evaluation.py --config configs/default.yaml --data-sources-config configs/data_sources.yaml --run-id "$RUN_ID" --split test val
 ```
 
-Outputs: `outputs/tables/eval/{test|val}/` (F1, ECE, confusion matrices, stratified cluster metrics, etc.).
+Outputs: `outputs/stage08_runs/full/$RUN_ID/evaluation/{08|08b}/{test|val}/` (F1, ECE, confusion matrices, stratified cluster metrics, etc.).
 
 ### 4.5 Automated tests (leakage-fix verification)
 
@@ -162,14 +162,13 @@ Key implementation files:
 
 | Path | Description |
 |------|-------------|
-| `outputs/tables/behaviour_dataset.csv` | Vote-level table, **no** clusters |
-| `outputs/tables/behaviour_dataset_with_clusters.csv` | Train-fitted cluster IDs (for 08b cache) |
-| `outputs/processed/split_manifest.json` | Three-way voter split |
-| `outputs/models/predictive_clusters/cluster_bundle.pkl` | Cluster models (train-fit only) |
-| `outputs/models/behaviour_agent2/` | RoBERTa model + `config.json` (`feat_dim=8`) |
-| `outputs/behaviour_modelling/agent2_artifacts_no_roberta/` | Numeric-only ablation + `config.json` (`feat_dim=10`) |
-| `outputs/reports/stage08_behaviour_modelling.md` | Stage 8 summary |
-| `outputs/tables/eval/test/metrics_report.md` | Stage 9 test metrics |
+| `outputs/stage08_runs/<variant>/<run-id>/run_manifest.json` | Run identity, source hashes, runtime provenance, and artifact hashes |
+| `inputs/behaviour_dataset.csv` | Shared vote-level input, **no** clusters |
+| `shared/split_manifest.json` | Three-way voter split shared by 08 and 08b |
+| `shared/predictive_clusters/` | Stage 08 train-fit cluster models |
+| `08/` | RoBERTa model, tokenizer, config, enriched data, reports, and logs |
+| `08b/` | Numeric-only ablation, causal-history data, reports, logs, and run-keyed cache |
+| `evaluation/08/test/`, `evaluation/08b/test/` | Matched held-out test results |
 
 ---
 
@@ -183,7 +182,7 @@ behaviour_model:
   group_windows_by: [voter, space]
 ```
 
-Default `predictive_cluster_artifacts_dir`: `outputs/models/predictive_clusters`
+`configs/data_sources.yaml` and `configs/data_sources_lean.yaml` specify the authoritative data inputs and `run.sample_variant`. Every run writes to a unique `outputs/stage08_runs/<variant>/<run-id>/` directory.
 
 ---
 
@@ -193,10 +192,11 @@ The first run of 08 or 08b creates the split manifest and enriched CSV. Subseque
 
 ```bash
 python scripts/08b_run_behaviour_modelling_no_roberta.py --config configs/default.yaml \
+  --data-sources-config configs/data_sources.yaml --run-id full_20261008_a \
   --reuse-split-manifest --reuse-window-cache
 ```
 
-**Note:** The 08b cache validates numeric columns and window size. Delete or rematerialize it after causal-history schema changes; the current cache has 10 features per step.
+**Note:** The run-local 08b cache validates source dataset, split, fitted preprocessor, numeric columns, and window size. A changed input is rejected; use a new run ID for a new experiment.
 
 ---
 
@@ -213,7 +213,7 @@ python scripts/08b_run_behaviour_modelling_no_roberta.py --config configs/defaul
 
 | Symptom | Action |
 |---------|--------|
-| `feat_dim` mismatch / `model.pt` load failure | Delete `outputs/models/behaviour_agent2/` and re-run Stage 08 |
+| `feat_dim` mismatch / `model.pt` load failure | Check the selected run's `08/config.json`; use a new run ID after changing inputs or model configuration |
 | Detection reports missing `votes_cleaned.parquet` | Run Stage 03 first |
 | Missing `dao_feature_table.csv` | Run Stage 04 first |
 | Zero windows | Check cleaned data has enough `(voter, space)` votes; lower `min_votes_per_pair` in clustering module |
@@ -229,4 +229,4 @@ python scripts/08b_run_behaviour_modelling_no_roberta.py --config configs/defaul
 - `docs/SUPERVISOR_NO_ROBERTA_RUNBOOK.md` — 08b numeric-only baseline
 - `SERVER_CHECKLIST.txt` — quick server checklist
 
-For debugging, cross-check markdown reports under `outputs/reports/` and assertions in `tests/test_leakage_safe_pipeline.py`.
+For Stage 08/08b debugging, cross-check reports under `outputs/stage08_runs/<variant>/<run-id>/{08,08b}/reports/` and assertions in `tests/test_leakage_safe_pipeline.py`.

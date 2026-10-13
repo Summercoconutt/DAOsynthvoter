@@ -25,9 +25,20 @@ from dao_governance.evaluation.metrics import (
     write_metrics_markdown,
 )
 from dao_governance.features.behaviour_pipeline import load_behaviour_votes
-from dao_governance.modelling.dataset import WindowDataset, collate_fn
-from dao_governance.modelling.model import TimeSeriesClassifier
-from dao_governance.modelling.preprocess import filter_df_to_voters, load_dataset, normalise_columns, select_numeric_columns
+from dao_governance.modelling.dataset import (
+    NumericWindowDataset,
+    WindowDataset,
+    collate_fn,
+    numeric_collate_fn,
+)
+from dao_governance.modelling.model import NumericOnlyTimeSeriesClassifier, TimeSeriesClassifier
+from dao_governance.modelling.preprocess import (
+    filter_df_to_voters,
+    load_dataset,
+    normalise_columns,
+    select_numeric_columns,
+    select_numeric_columns_no_roberta,
+)
 from dao_governance.modelling.windows import build_windows
 
 
@@ -56,9 +67,21 @@ def _run_inference(
     batch_size: int,
     max_windows: int,
 ) -> tuple[list[int], list[int], np.ndarray, list[str], list[int], list[int], int]:
-    tokenizer = AutoTokenizer.from_pretrained(artifacts_dir / "tokenizer")
-    model = TimeSeriesClassifier(pretrained_model_name=cfg_train["pretrained"], feat_dim=cfg_train["feat_dim"])
-    model.text_encoder.resize_token_embeddings(len(tokenizer))
+    numeric_only = cfg_train.get("model_type") == "numeric_only_temporal"
+    tokenizer = None
+    if numeric_only:
+        model = NumericOnlyTimeSeriesClassifier(
+            feat_dim=cfg_train["feat_dim"],
+            dropout=float(cfg_train.get("dropout", 0.1)),
+            dim_feedforward=int(cfg_train.get("dim_feedforward", 1024)),
+        )
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(artifacts_dir / "tokenizer")
+        model = TimeSeriesClassifier(
+            pretrained_model_name=cfg_train["pretrained"],
+            feat_dim=cfg_train["feat_dim"],
+        )
+        model.text_encoder.resize_token_embeddings(len(tokenizer))
     device = "cuda" if torch.cuda.is_available() else "cpu"
     state = torch.load(artifacts_dir / "model.pt", map_location=device)
     model.load_state_dict(state, strict=True)
@@ -71,7 +94,8 @@ def _run_inference(
         raise RuntimeError("No rows for evaluation after voter filter.")
 
     valid_df = normalise_columns(raw_df, preprocessor=preprocessor)
-    windows = build_windows(valid_df, window_size=cfg_train["window"], numeric_cols=select_numeric_columns())
+    numeric_cols = select_numeric_columns_no_roberta() if numeric_only else select_numeric_columns()
+    windows = build_windows(valid_df, window_size=cfg_train["window"], numeric_cols=numeric_cols)
     if not windows:
         raise RuntimeError("No windows for evaluation.")
     if max_windows > 0 and len(windows) > max_windows:
@@ -79,8 +103,13 @@ def _run_inference(
         idx = rng.choice(len(windows), size=max_windows, replace=False)
         windows = [windows[i] for i in sorted(idx)]
 
-    ds = WindowDataset(windows, tokenizer, max_length=cfg_train["max_length"])
-    dl = DataLoader(ds, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
+    if numeric_only:
+        ds = NumericWindowDataset(windows)
+        collate = numeric_collate_fn
+    else:
+        ds = WindowDataset(windows, tokenizer, max_length=cfg_train["max_length"])
+        collate = collate_fn
+    dl = DataLoader(ds, batch_size=batch_size, shuffle=False, collate_fn=collate)
 
     y_true: list[int] = []
     y_pred: list[int] = []

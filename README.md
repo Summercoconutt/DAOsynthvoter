@@ -61,16 +61,15 @@ python scripts/10_run_detection_mode.py --skip-raw-scan --smoke-train
 
 Report: `outputs/reports/detection_mode_report.md`.
 
-## Behaviour model evaluation (after stage 08)
+## Behaviour model evaluation (after stages 08 and 08b)
 
-Use the **same voter split** as training (`outputs/processed/split_manifest.json`):
+Stage 09 evaluates both models from the same immutable run and saved voter split. Record all desired splits in one invocation:
 
 ```text
-python scripts/09_run_behaviour_evaluation.py --config configs/default.yaml --split test
-python scripts/09_run_behaviour_evaluation.py --config configs/default.yaml --split val
+python scripts/09_run_behaviour_evaluation.py --config configs/default.yaml --data-sources-config configs/data_sources.yaml --run-id "$RUN_ID" --split test val
 ```
 
-Outputs under `outputs/tables/eval/{test|val}/`:
+Outputs are under `outputs/stage08_runs/<variant>/<run-id>/evaluation/{08|08b}/{test|val}/`:
 
 - `metrics_summary.json`, `metrics_report.md` — macro/weighted F1, balanced accuracy, MCC, kappa, ECE, log loss
 - `per_class_metrics.csv`, `classification_report.csv`
@@ -88,18 +87,7 @@ the following files from the same training run.
 
 ### Stage 08: RoBERTa + numeric model
 
-- `outputs/models/behaviour_agent2/model.pt` — trained PyTorch `state_dict`.
-- `outputs/models/behaviour_agent2/config.json` — model architecture, feature
-  dimension, label map, window size, preprocessing parameters, and paths.
-- `outputs/models/behaviour_agent2/tokenizer/` — tokenizer files, including the
-  added special tokens used for historical labels and prediction steps.
-- `outputs/tables/behaviour_dataset.csv` and/or
-  `outputs/tables/behaviour_dataset_with_clusters.csv` — source rows used to
-  reconstruct the temporal windows.
-- `outputs/processed/split_manifest.json` — the leakage-safe voter split, when
-  analysing train/validation/test examples consistently with training.
-- `outputs/models/predictive_clusters/cluster_bundle.pkl` — required if cluster
-  features or cluster assignments must be reproduced from source data.
+Use `outputs/stage08_runs/<variant>/<run-id>/08/` for `model.pt`, `config.json`, and the exact `tokenizer/`; use the matching run's `inputs/behaviour_dataset.csv`, `shared/split_manifest.json`, and `shared/predictive_clusters/` to reconstruct training windows.
 - `src/dao_governance/modelling/model.py`, `dataset.py`, `preprocess.py`, and
   `windows.py` — model definition, tokenisation/collation, preprocessing, and
   window construction.
@@ -110,17 +98,7 @@ attributed directly.
 
 ### Stage 08b: numeric-only model
 
-- `outputs/behaviour_modelling/agent2_artifacts_no_roberta/model.pt` — trained
-  PyTorch `state_dict`.
-- `outputs/behaviour_modelling/agent2_artifacts_no_roberta/config.json` — model
-  architecture, feature ordering, preprocessing parameters, and window size.
-- `outputs/tables/behaviour_dataset_with_clusters.csv` (preferred) or
-  `outputs/tables/behaviour_dataset.csv` — source rows, including the causal
-  historical-choice features when applicable.
-- `outputs/processed/split_manifest.json` — the training voter split.
-- `outputs/behaviour_modelling/window_cache_no_roberta/` — optional; use its
-  `meta.json` and memmap files when analysing cached windows instead of
-  rebuilding them from the CSV.
+Use `outputs/stage08_runs/<variant>/<run-id>/08b/` for weights, config, causal-history data, and any window cache. Its input dataset and split are the same run-scoped files listed above.
 - `src/dao_governance/modelling/model.py`, `dataset.py`, `preprocess.py`, and
   `windows.py` — model definition and exact numeric window construction.
 
@@ -173,4 +151,13 @@ python run_full_pipeline.py --from-stage 4 --to-stage 8 --config configs/default
 
 ## Outputs / validation
 
-Each stage writes a markdown summary under `outputs/reports/stage*.md`. Structural cleaning statistics appear in `outputs/reports/stage03_global_cleaning.md` and related tables. Behaviour training writes `outputs/tables/preprocessing_report.md`, `outputs/tables/training_report.md`, and `outputs/reports/stage08_behaviour_modelling.md`.
+Stages 01–07 retain their configured outputs. Stage 08, 08b, Stage 09, and exports are isolated under `outputs/stage08_runs/<variant>/<run-id>/`; each run contains its source/config provenance, paired model artifacts, matching split and datasets, reports/logs, and (after Stage 09) held-out evaluation for both models. The run ID is immutable; use a new ID for every experiment.
+
+Run a paired full sample with:
+
+```bash
+./run_all.sh configs/default.yaml configs/data_sources.yaml full_20261008_a
+./scripts/export_stage08_run.sh outputs/stage08_runs/full/full_20261008_a /tmp/exports
+```
+
+For lean, pass `configs/data_sources_lean.yaml` and a separate run ID to both commands. The exporter verifies the run manifest and refuses incomplete or overwritten bundles.

@@ -24,6 +24,7 @@ def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any
 def load_config(
     config_path: Path | None = None,
     extra_path: Path | None = None,
+    data_sources_path: Path | None = None,
 ) -> Dict[str, Any]:
     root = Path(__file__).resolve().parents[2]
     default = root / "configs" / "default.yaml"
@@ -33,11 +34,23 @@ def load_config(
     with open(path, encoding="utf-8") as f:
         cfg = yaml.safe_load(f) or {}
 
-    data_sources_path = root / DEFAULT_DATA_SOURCES_CONFIG
-    if not extra_path and data_sources_path.exists():
-        with open(data_sources_path, encoding="utf-8") as f:
+    selected_sources = Path(data_sources_path) if data_sources_path else None
+    if selected_sources is None and not extra_path:
+        selected_sources = root / DEFAULT_DATA_SOURCES_CONFIG
+    if selected_sources and not selected_sources.is_absolute():
+        selected_sources = root / selected_sources
+    if selected_sources and not selected_sources.is_file():
+        raise FileNotFoundError(f"Data-source config not found: {selected_sources}")
+    if selected_sources:
+        with open(selected_sources, encoding="utf-8") as f:
             cfg = _deep_merge(cfg, yaml.safe_load(f) or {})
 
+    if extra_path and not Path(extra_path).is_file():
+        raise FileNotFoundError(f"Extra config not found: {extra_path}")
+    if extra_path and Path(extra_path).exists():
+        extra_resolved = Path(extra_path).resolve()
+        if selected_sources and extra_resolved == selected_sources.resolve():
+            extra_path = None
     if extra_path and Path(extra_path).exists():
         with open(extra_path, encoding="utf-8") as f:
             cfg = _deep_merge(cfg, yaml.safe_load(f) or {})
