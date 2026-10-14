@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Reproducible pipeline: stages 01-08, numeric-only ablation, then evaluation.
-# Usage: ./run_all.sh [config] [data-sources-config] [run-id]
+# Usage: ./run_all.sh [config] [data-sources-config] [run-id] [fine-tune|frozen]
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -10,9 +10,14 @@ export PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
 CONFIG="${1:-configs/default.yaml}"
 DATA_SOURCES_CONFIG="${2:-configs/data_sources.yaml}"
 RUN_ID="${3:-run_$(date -u +%Y%m%dT%H%M%SZ)}"
+TEXT_ENCODER_MODE="${4:-fine-tune}"
+if [[ "$TEXT_ENCODER_MODE" != "fine-tune" && "$TEXT_ENCODER_MODE" != "frozen" ]]; then
+  printf 'Invalid text encoder mode: %s (expected fine-tune or frozen)\n' "$TEXT_ENCODER_MODE" >&2
+  exit 2
+fi
 PIPELINE_ARGS=(--config "$CONFIG" --extra-config "$DATA_SOURCES_CONFIG")
 STAGE08_ARGS=(--config "$CONFIG" --data-sources-config "$DATA_SOURCES_CONFIG")
-printf '[run_all] Stage 08/08b run ID: %s\n' "$RUN_ID"
+printf '[run_all] Stage 08/08b run ID: %s; text encoder mode: %s\n' "$RUN_ID" "$TEXT_ENCODER_MODE"
 
 # Optional preflight: uncomment --skip-raw-scan when raw archives are unavailable locally.
 # python scripts/10_run_detection_mode.py "${COMMON_ARGS[@]}" --skip-raw-scan
@@ -28,6 +33,7 @@ printf '[run_all] Stage 08/08b run ID: %s\n' "$RUN_ID"
 # 08 trains the full RoBERTa + numeric + cluster model; 08b trains the same setup without RoBERTa.
 # Keep the dataset and split identical between the two runs; only the BERT inclusion changes.
 # The run ID isolates every generated file. 08b consumes the exact 08 dataset and split.
-python scripts/08_run_behaviour_modelling.py "${STAGE08_ARGS[@]}" --run-id "$RUN_ID" --resume-run
+python scripts/08_run_behaviour_modelling.py "${STAGE08_ARGS[@]}" --run-id "$RUN_ID" --resume-run \
+  --text-encoder-mode "$TEXT_ENCODER_MODE"
 python scripts/08b_run_behaviour_modelling_no_roberta.py "${STAGE08_ARGS[@]}" --run-id "$RUN_ID"
 python scripts/09_run_behaviour_evaluation.py "${STAGE08_ARGS[@]}" --run-id "$RUN_ID" --split test val

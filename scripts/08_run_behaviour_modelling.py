@@ -16,6 +16,7 @@ import json
 import random
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,7 +37,12 @@ from dao_governance.features.behaviour_pipeline import (
     prepare_behaviour_splits,
     write_enriched_behaviour_csv,
 )
-from dao_governance.modelling.dataset import WindowDataset, collate_fn
+from dao_governance.modelling.dataset import (
+    TokenizedTextCache,
+    WindowDataset,
+    build_frozen_text_embedding_cache,
+    collate_fn,
+)
 from dao_governance.modelling.metrics import macro_prf
 from dao_governance.modelling.model import TimeSeriesClassifier
 from dao_governance.modelling.preprocess import (
@@ -106,6 +112,12 @@ def main() -> None:
     ap.add_argument("--data-sources-config", type=str, default="configs/data_sources.yaml")
     ap.add_argument("--extra-config", type=str, default="")
     ap.add_argument("--run-id", required=True, help="Unique immutable identifier for this full/lean 08+08b run.")
+    ap.add_argument(
+        "--text-encoder-mode",
+        choices=("fine-tune", "frozen"),
+        default=None,
+        help="Fine-tune the pretrained text encoder (default) or freeze it and cache text embeddings.",
+    )
     ap.add_argument("--resume-run", action="store_true", help="Resume an incomplete Stage 08 run after identity checks.")
     ap.add_argument("--reuse-behaviour-csv", action="store_true", help="Skip rebuilding behaviour CSV if it exists.")
     ap.add_argument("--save-behaviour-copy", nargs="?", const="", default=None, metavar="TAG",
@@ -134,6 +146,12 @@ def main() -> None:
 
     paths = cfg.get("paths", {})
     bm = cfg.get("behaviour_model", {})
+    text_encoder_mode = args.text_encoder_mode or str(
+        bm.get("text_encoder_mode", "fine-tune")
+    )
+    if text_encoder_mode not in {"fine-tune", "frozen"}:
+        raise ValueError("behaviour_model.text_encoder_mode must be 'fine-tune' or 'frozen'.")
+    bm["text_encoder_mode"] = text_encoder_mode
     dq = cfg.get("data_quality", {})
     vc = cfg.get("voter_clustering", {})
 
@@ -313,17 +331,60 @@ def main() -> None:
         special_tokens.extend(["[TITLE]", "[BODY]"])
     tokenizer.add_special_tokens({"additional_special_tokens": special_tokens})
 
-    train_ds = WindowDataset(train_windows, tokenizer, max_length)
-    valid_ds = WindowDataset(valid_windows, tokenizer, max_length)
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
-    valid_loader = DataLoader(valid_ds, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
-
     device = "cuda" if torch.cuda.is_available() else "cpu"
     feat_dim = len(train_windows[0].window_features[0])
     model = TimeSeriesClassifier(pretrained_model_name=pretrained, feat_dim=feat_dim).to(device)
     model.text_encoder.resize_token_embeddings(len(tokenizer))
+    model.set_text_encoder_frozen(text_encoder_mode == "frozen")
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
+    _log_phase("pre-tokenizing unique window texts")
+    token_cache = TokenizedTextCache(
+        train_windows + valid_windows,
+        tokenizer,
+        max_length=max_length,
+    )
+    embedding_cache = None
+    embedding_cache_tmp = None
+    if text_encoder_mode == "frozen":
+        _log_phase(
+            f"caching frozen text embeddings for {len(token_cache.lengths):,} unique texts"
+        )
+        embedding_cache_tmp = tempfile.TemporaryDirectory(prefix="stage08_text_embeddings_")
+        embedding_batch_size = int(
+            bm.get("embedding_batch_size", max(batch_size * window_size, 32))
+        )
+        embedding_cache = build_frozen_text_embedding_cache(
+            token_cache,
+            model.text_encoder,
+            device=device,
+            cache_path=Path(embedding_cache_tmp.name) / "embeddings.f16",
+            batch_size=embedding_batch_size,
+        )
+
+    train_ds = WindowDataset(
+        train_windows,
+        tokenizer,
+        max_length,
+        token_cache=token_cache,
+        text_embeddings=embedding_cache,
+    )
+    valid_ds = WindowDataset(
+        valid_windows,
+        tokenizer,
+        max_length,
+        token_cache=token_cache,
+        text_embeddings=embedding_cache,
+    )
+    token_cache.release_lookup()
+    if embedding_cache is not None:
+        token_cache.release_tokens()
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
+    valid_loader = DataLoader(valid_ds, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
+
+    optimizer = torch.optim.AdamW(
+        [parameter for parameter in model.parameters() if parameter.requires_grad],
+        lr=lr,
+    )
     total_steps = len(train_loader) * epochs
     scheduler = get_linear_schedule_with_warmup(optimizer, int(total_steps * 0.1), total_steps)
     class_weights = compute_class_weights(np.array([w.target_label for w in train_windows], dtype=int)).to(device)
@@ -332,59 +393,71 @@ def main() -> None:
     best_state = None
     train_lines = []
 
-    _log_phase(f"starting training for {epochs} epochs")
-    for epoch in range(epochs):
-        model.train()
-        tr_true, tr_pred, tr_loss = [], [], 0.0
-        for batch_idx, batch in enumerate(tqdm(train_loader, desc=f"train {epoch+1}/{epochs}")):
-            for k in batch:
-                batch[k] = batch[k].to(device)
-            out = model(batch)
-            loss = model.loss_fn(out["logits"], batch["labels"], class_weights=class_weights)
-            if not torch.isfinite(loss):
-                nf = batch["num_feats"].detach().cpu().numpy()
-                raise RuntimeError(
-                    f"Non-finite loss at epoch={epoch+1} batch={batch_idx}. "
-                    f"num_feats finite={np.isfinite(nf).all()} min={np.nanmin(nf)} max={np.nanmax(nf)}"
-                )
-            optimizer.zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
-            optimizer.step()
-            scheduler.step()
-            tr_loss += float(loss.item())
-            tr_true.extend(batch["labels"].detach().cpu().numpy().tolist())
-            tr_pred.extend(out["logits"].argmax(dim=-1).detach().cpu().numpy().tolist())
-
-        train_m = macro_prf(tr_true, tr_pred)
-
-        model.eval()
-        va_true, va_pred = [], []
-        with torch.no_grad():
-            for batch in tqdm(valid_loader, desc=f"valid {epoch+1}/{epochs}"):
+    try:
+        _log_phase(f"starting training for {epochs} epochs")
+        for epoch in range(epochs):
+            model.train()
+            tr_true, tr_pred, tr_loss = [], [], 0.0
+            for batch_idx, batch in enumerate(tqdm(train_loader, desc=f"train {epoch+1}/{epochs}")):
                 for k in batch:
                     batch[k] = batch[k].to(device)
                 out = model(batch)
-                va_true.extend(batch["labels"].detach().cpu().numpy().tolist())
-                va_pred.extend(out["logits"].argmax(dim=-1).detach().cpu().numpy().tolist())
-        valid_m = macro_prf(va_true, va_pred)
-        cm = confusion_matrix(va_true, va_pred, labels=[0, 1, 2])
-        line = (
-            f"epoch={epoch+1} loss={tr_loss/max(len(train_loader),1):.6f} "
-            f"train_f1={train_m['f1']:.4f} valid_f1={valid_m['f1']:.4f} "
-            f"acc_train={train_m['accuracy']:.4f} acc_valid={valid_m['accuracy']:.4f}"
-        )
-        print(line)
-        train_lines.append(line)
-        (logs_dir / f"confusion_valid_epoch{epoch+1}.csv").write_text(
-            "pred_FOR,pred_AGAINST,pred_ABSTAIN\n"
-            + "\n".join(",".join(map(str, row)) for row in cm),
-            encoding="utf-8",
-        )
+                loss = model.loss_fn(out["logits"], batch["labels"], class_weights=class_weights)
+                if not torch.isfinite(loss):
+                    nf = batch["num_feats"].detach().cpu().numpy()
+                    raise RuntimeError(
+                        f"Non-finite loss at epoch={epoch+1} batch={batch_idx}. "
+                        f"num_feats finite={np.isfinite(nf).all()} min={np.nanmin(nf)} max={np.nanmax(nf)}"
+                    )
+                optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(
+                    [parameter for parameter in model.parameters() if parameter.requires_grad],
+                    max_grad_norm,
+                )
+                optimizer.step()
+                scheduler.step()
+                tr_loss += float(loss.item())
+                tr_true.extend(batch["labels"].detach().cpu().numpy().tolist())
+                tr_pred.extend(out["logits"].argmax(dim=-1).detach().cpu().numpy().tolist())
 
-        if valid_m["f1"] > best_f1:
-            best_f1 = valid_m["f1"]
-            best_state = {k: v.cpu() for k, v in model.state_dict().items()}
+            train_m = macro_prf(tr_true, tr_pred)
+
+            model.eval()
+            va_true, va_pred = [], []
+            with torch.no_grad():
+                for batch in tqdm(valid_loader, desc=f"valid {epoch+1}/{epochs}"):
+                    for k in batch:
+                        batch[k] = batch[k].to(device)
+                    out = model(batch)
+                    va_true.extend(batch["labels"].detach().cpu().numpy().tolist())
+                    va_pred.extend(out["logits"].argmax(dim=-1).detach().cpu().numpy().tolist())
+            valid_m = macro_prf(va_true, va_pred)
+            cm = confusion_matrix(va_true, va_pred, labels=[0, 1, 2])
+            line = (
+                f"epoch={epoch+1} loss={tr_loss/max(len(train_loader),1):.6f} "
+                f"train_f1={train_m['f1']:.4f} valid_f1={valid_m['f1']:.4f} "
+                f"acc_train={train_m['accuracy']:.4f} acc_valid={valid_m['accuracy']:.4f}"
+            )
+            print(line)
+            train_lines.append(line)
+            (logs_dir / f"confusion_valid_epoch{epoch+1}.csv").write_text(
+                "pred_FOR,pred_AGAINST,pred_ABSTAIN\n"
+                + "\n".join(",".join(map(str, row)) for row in cm),
+                encoding="utf-8",
+            )
+
+            if valid_m["f1"] > best_f1:
+                best_f1 = valid_m["f1"]
+                best_state = {k: v.cpu() for k, v in model.state_dict().items()}
+    finally:
+        if embedding_cache is not None:
+            train_ds.text_embeddings = None
+            valid_ds.text_embeddings = None
+            embedding_cache.flush()
+            embedding_cache._mmap.close()
+        if embedding_cache_tmp is not None:
+            embedding_cache_tmp.cleanup()
 
     tok_dir = out_dir / "tokenizer"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -396,6 +469,7 @@ def main() -> None:
 
     train_cfg = {
         "pretrained": pretrained,
+        "text_encoder_mode": text_encoder_mode,
         "text_mode": text_mode,
         "window": window_size,
         "max_length": max_length,
@@ -423,6 +497,7 @@ def main() -> None:
 
     train_report.write_text(
         "# Model training report\n\n"
+        f"- Text encoder mode: **{text_encoder_mode}**\n"
         + "\n".join(f"- {ln}" for ln in train_lines)
         + f"\n\nBest validation macro-F1: **{best_f1:.4f}**\n",
         encoding="utf-8",
@@ -436,6 +511,7 @@ def main() -> None:
                 f"- Cluster artifacts: `{cluster_dir}`",
                 f"- Enriched CSV (cache): `{enriched_csv}`",
                 f"- Text mode: `{text_mode}`",
+                f"- Text encoder: `{text_encoder_mode}`",
                 f"- Training report: `{train_report}`",
                 f"- Preprocessing report: `{prep_report}`",
                 "",

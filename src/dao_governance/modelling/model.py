@@ -16,9 +16,11 @@ class TimeSeriesClassifier(nn.Module):
         feat_dim: int = 10,
         num_classes: int = 3,
         dropout: float = 0.1,
+        freeze_text_encoder: bool = False,
     ):
         super().__init__()
         self.text_encoder = AutoModel.from_pretrained(pretrained_model_name)
+        self.text_encoder_frozen = False
         text_hidden = self.text_encoder.config.hidden_size
         self.text_proj = nn.Linear(text_hidden, hidden_dim)
 
@@ -45,19 +47,47 @@ class TimeSeriesClassifier(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(256, num_classes),
         )
+        if freeze_text_encoder:
+            self.set_text_encoder_frozen(True)
+
+    def set_text_encoder_frozen(self, frozen: bool = True) -> None:
+        self.text_encoder_frozen = frozen
+        for parameter in self.text_encoder.parameters():
+            parameter.requires_grad_(not frozen)
+        if frozen:
+            self.text_encoder.eval()
+
+    def train(self, mode: bool = True) -> "TimeSeriesClassifier":
+        super().train(mode)
+        if self.text_encoder_frozen:
+            self.text_encoder.eval()
+        return self
 
     def forward(self, batch: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        x = batch["input_ids"]
-        a = batch["attention_mask"]
         f = batch["num_feats"]
-        bsz, steps, seqlen = x.size()
 
         if not torch.isfinite(f).all():
             raise RuntimeError("Non-finite num_feats in forward (must be caught earlier).")
 
-        enc = self.text_encoder(input_ids=x.view(bsz * steps, seqlen), attention_mask=a.view(bsz * steps, seqlen))
-        cls = enc.last_hidden_state[:, 0, :]
-        cls = self.text_proj(cls).view(bsz, steps, -1)
+        if "text_embeddings" in batch:
+            cls = batch["text_embeddings"]
+        else:
+            x = batch["input_ids"]
+            a = batch["attention_mask"]
+            bsz, steps, seqlen = x.size()
+            if self.text_encoder_frozen:
+                with torch.no_grad():
+                    enc = self.text_encoder(
+                        input_ids=x.view(bsz * steps, seqlen),
+                        attention_mask=a.view(bsz * steps, seqlen),
+                    )
+            else:
+                enc = self.text_encoder(
+                    input_ids=x.view(bsz * steps, seqlen),
+                    attention_mask=a.view(bsz * steps, seqlen),
+                )
+            cls = enc.last_hidden_state[:, 0, :].view(bsz, steps, -1)
+        cls = self.text_proj(cls)
         f = self.feat_proj(f)
         fused = torch.cat([cls, f], dim=-1)
         seq = self.temporal(fused)

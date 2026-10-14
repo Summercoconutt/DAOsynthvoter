@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -27,7 +28,9 @@ from dao_governance.evaluation.metrics import (
 from dao_governance.features.behaviour_pipeline import load_behaviour_votes
 from dao_governance.modelling.dataset import (
     NumericWindowDataset,
+    TokenizedTextCache,
     WindowDataset,
+    build_frozen_text_embedding_cache,
     collate_fn,
     numeric_collate_fn,
 )
@@ -68,6 +71,7 @@ def _run_inference(
     max_windows: int,
 ) -> tuple[list[int], list[int], np.ndarray, list[str], list[int], list[int], int]:
     numeric_only = cfg_train.get("model_type") == "numeric_only_temporal"
+    text_encoder_frozen = cfg_train.get("text_encoder_mode", "fine-tune") == "frozen"
     tokenizer = None
     if numeric_only:
         model = NumericOnlyTimeSeriesClassifier(
@@ -80,8 +84,10 @@ def _run_inference(
         model = TimeSeriesClassifier(
             pretrained_model_name=cfg_train["pretrained"],
             feat_dim=cfg_train["feat_dim"],
+            freeze_text_encoder=text_encoder_frozen,
         )
         model.text_encoder.resize_token_embeddings(len(tokenizer))
+        model.set_text_encoder_frozen(text_encoder_frozen)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     state = torch.load(artifacts_dir / "model.pt", map_location=device)
     model.load_state_dict(state, strict=True)
@@ -106,8 +112,38 @@ def _run_inference(
     if numeric_only:
         ds = NumericWindowDataset(windows)
         collate = numeric_collate_fn
+        token_cache = None
+        text_embedding_cache = None
+        embedding_cache_tmp = None
     else:
-        ds = WindowDataset(windows, tokenizer, max_length=cfg_train["max_length"])
+        token_cache = TokenizedTextCache(
+            windows,
+            tokenizer,
+            max_length=cfg_train["max_length"],
+        )
+        text_embedding_cache = None
+        embedding_cache_tmp = None
+        if text_encoder_frozen:
+            embedding_cache_tmp = tempfile.TemporaryDirectory(
+                prefix="stage08_eval_text_embeddings_"
+            )
+            text_embedding_cache = build_frozen_text_embedding_cache(
+                token_cache,
+                model.text_encoder,
+                device=device,
+                cache_path=Path(embedding_cache_tmp.name) / "embeddings.f16",
+                batch_size=int(batch_size),
+            )
+        ds = WindowDataset(
+            windows,
+            tokenizer,
+            max_length=cfg_train["max_length"],
+            token_cache=token_cache,
+            text_embeddings=text_embedding_cache,
+        )
+        token_cache.release_lookup()
+        if text_embedding_cache is not None:
+            token_cache.release_tokens()
         collate = collate_fn
     dl = DataLoader(ds, batch_size=batch_size, shuffle=False, collate_fn=collate)
 
@@ -120,24 +156,32 @@ def _run_inference(
 
     model.eval()
     offset = 0
-    with torch.no_grad():
-        for batch in dl:
-            for k in batch:
-                batch[k] = batch[k].to(device)
-            logits = model(batch)["logits"]
-            prob = F.softmax(logits, dim=-1).cpu().numpy()
-            preds = prob.argmax(axis=-1)
-            labels = batch["labels"].cpu().numpy()
-            bs = len(labels)
-            batch_windows = windows[offset : offset + bs]
-            offset += bs
+    try:
+        with torch.no_grad():
+            for batch in dl:
+                for k in batch:
+                    batch[k] = batch[k].to(device)
+                logits = model(batch)["logits"]
+                prob = F.softmax(logits, dim=-1).cpu().numpy()
+                preds = prob.argmax(axis=-1)
+                labels = batch["labels"].cpu().numpy()
+                bs = len(labels)
+                batch_windows = windows[offset : offset + bs]
+                offset += bs
 
-            y_true.extend(labels.tolist())
-            y_pred.extend(preds.tolist())
-            y_prob_rows.extend(prob)
-            voters.extend(w.voter_id for w in batch_windows)
-            dao.extend(int(w.dao_cluster) for w in batch_windows)
-            voter_c.extend(int(w.voter_cluster) for w in batch_windows)
+                y_true.extend(labels.tolist())
+                y_pred.extend(preds.tolist())
+                y_prob_rows.extend(prob)
+                voters.extend(w.voter_id for w in batch_windows)
+                dao.extend(int(w.dao_cluster) for w in batch_windows)
+                voter_c.extend(int(w.voter_cluster) for w in batch_windows)
+    finally:
+        if text_embedding_cache is not None:
+            ds.text_embeddings = None
+            text_embedding_cache.flush()
+            text_embedding_cache._mmap.close()
+        if embedding_cache_tmp is not None:
+            embedding_cache_tmp.cleanup()
 
     y_prob = np.stack(y_prob_rows, axis=0)
     return y_true, y_pred, y_prob, voters, dao, voter_c, len(windows)

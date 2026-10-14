@@ -55,10 +55,29 @@ behaviour_model:
 
 Set either to `false` for ablation.
 
+## Text encoder efficiency
+
+Stage 08 pre-tokenizes each distinct window text once and dynamically pads each
+batch to its longest sequence. The default `fine-tune` mode preserves the
+existing behavior: the pretrained encoder is updated during training.
+
+To freeze the pretrained encoder and cache its unique text embeddings for the
+training run, use:
+
+```powershell
+python scripts/08_run_behaviour_modelling.py --config configs/default.yaml `
+  --data-sources-config configs/data_sources.yaml --run-id frozen_trial_01 `
+  --text-encoder-mode frozen
+```
+
+Use `--text-encoder-mode fine-tune` to explicitly select the default. Frozen
+mode changes the experiment because the encoder weights are no longer trained;
+the cached embeddings are stored temporarily and removed when training ends.
+
 ## Automated checks
 
 ```powershell
-python -m pytest tests/test_leakage_safe_pipeline.py -v
+python -m pytest tests/test_text_encoder_efficiency.py tests/test_leakage_safe_pipeline.py -v
 ```
 
 ## Large dataset (08b cache)
