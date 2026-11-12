@@ -37,6 +37,12 @@ def main() -> None:
     ap.add_argument("--data-sources-config", type=str, default="configs/data_sources.yaml")
     ap.add_argument("--extra-config", type=str, default="")
     ap.add_argument("--run-id", required=True, help="Completed paired Stage 08/08b run to evaluate.")
+    ap.add_argument(
+        "--text-encoder-mode",
+        choices=("fine-tune", "frozen"),
+        default=None,
+        help="Match a Stage 08 command-line override when verifying the paired run config.",
+    )
     ap.add_argument("--resume-stage", action="store_true", help="Resume an incomplete evaluation within this run.")
     ap.add_argument(
         "--model",
@@ -69,6 +75,8 @@ def main() -> None:
     extra = (base / args.extra_config).resolve() if args.extra_config else None
     cfg = load_config(config_path=cfg_path, extra_path=extra, data_sources_path=data_sources_cfg_path)
     bm = cfg.get("behaviour_model", {})
+    if args.text_encoder_mode is not None:
+        bm["text_encoder_mode"] = args.text_encoder_mode
     run_id = args.run_id.strip()
     sample_variant = str((cfg.get("run") or {}).get("sample_variant", "full")).strip().lower()
     run_root = resolve_run_root(base, cfg, run_id)

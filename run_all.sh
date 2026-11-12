@@ -33,7 +33,9 @@ printf '[run_all] Stage 08/08b run ID: %s; text encoder mode: %s\n' "$RUN_ID" "$
 # 08 trains the full RoBERTa + numeric + cluster model; 08b trains the same setup without RoBERTa.
 # Keep the dataset and split identical between the two runs; only the BERT inclusion changes.
 # The run ID isolates every generated file. 08b consumes the exact 08 dataset and split.
-python scripts/08_run_behaviour_modelling.py "${STAGE08_ARGS[@]}" --run-id "$RUN_ID" --resume-run \
+python scripts/08_run_behaviour_modelling.py "${STAGE08_ARGS[@]}" --run-id "$RUN_ID" \
   --text-encoder-mode "$TEXT_ENCODER_MODE"
-python scripts/08b_run_behaviour_modelling_no_roberta.py "${STAGE08_ARGS[@]}" --run-id "$RUN_ID"
-python scripts/09_run_behaviour_evaluation.py "${STAGE08_ARGS[@]}" --run-id "$RUN_ID" --split test val
+python scripts/08b_run_behaviour_modelling_no_roberta.py "${STAGE08_ARGS[@]}" --run-id "$RUN_ID" \
+  --text-encoder-mode "$TEXT_ENCODER_MODE"
+python scripts/09_run_behaviour_evaluation.py "${STAGE08_ARGS[@]}" --run-id "$RUN_ID" \
+  --text-encoder-mode "$TEXT_ENCODER_MODE" --split test val

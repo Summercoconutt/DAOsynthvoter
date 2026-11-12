@@ -73,6 +73,10 @@ python scripts/08_run_behaviour_modelling.py --config configs/default.yaml `
 Use `--text-encoder-mode fine-tune` to explicitly select the default. Frozen
 mode changes the experiment because the encoder weights are no longer trained;
 the cached embeddings are stored temporarily and removed when training ends.
+When selecting the mode with this command-line option, pass the same
+`--text-encoder-mode` value to Stage 08b and Stage 09 so their run-identity
+checks use the effective Stage 08 configuration. If the mode is set in the
+configuration file instead, no additional option is needed for those stages.
 
 ## Automated checks
 
@@ -90,4 +94,6 @@ python scripts/08b_run_behaviour_modelling_no_roberta.py --config configs/defaul
   --reuse-split-manifest --reuse-window-cache
 ```
 
+If Stage 08 used a `--text-encoder-mode` command-line override, pass that same
+option to Stage 08b and Stage 09.
 The cache is under that run’s `08b/window_cache/`; reuse is accepted only when dataset, split, preprocessor, feature schema, and window-size hashes match. Start a new run ID after changing source data or modelling code.

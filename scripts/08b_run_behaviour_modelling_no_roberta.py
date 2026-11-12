@@ -279,6 +279,12 @@ def main() -> None:
     ap.add_argument("--data-sources-config", type=str, default="configs/data_sources.yaml")
     ap.add_argument("--extra-config", type=str, default="")
     ap.add_argument("--run-id", required=True, help="The existing Stage 08 run ID to pair with.")
+    ap.add_argument(
+        "--text-encoder-mode",
+        choices=("fine-tune", "frozen"),
+        default=None,
+        help="Match a Stage 08 command-line override when verifying the paired run config.",
+    )
     ap.add_argument("--resume-stage", action="store_true", help="Resume an incomplete 08b stage within this run.")
     ap.add_argument("--save-behaviour-copy", nargs="?", const="", default=None, metavar="TAG",
                     help="Save a byte-for-byte copy as behaviour_dataset_with_clusters_08b_[TAG].csv.")
@@ -335,6 +341,8 @@ def main() -> None:
 
     paths = cfg.get("paths", {})
     bm = cfg.get("behaviour_model", {})
+    if args.text_encoder_mode is not None:
+        bm["text_encoder_mode"] = args.text_encoder_mode
     dq = cfg.get("data_quality", {})
     run_id = args.run_id.strip()
     sample_variant = str((cfg.get("run") or {}).get("sample_variant", "full")).strip().lower()
