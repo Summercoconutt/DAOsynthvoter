@@ -25,3 +25,10 @@ data/**/*.csv
 .ipynb_checkpoints/
 .DS_Store
 Thumbs.db
+
+# Keep unpublished drafts, private paper figures and generated LaTeX outputs local
+paper-private/
+*.aux
+*.synctex.gz
+*.fls
+*.fdb_latexmk
