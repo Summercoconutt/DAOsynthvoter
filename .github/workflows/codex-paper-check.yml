@@ -6,6 +6,8 @@ on:
       - '.agents/skills/dao-paper/**'
       - 'docs/RESEARCH_PAPER_WORKFLOW.md'
       - 'paper-template/**'
+      - 'scripts/export_paper_table.py'
+      - 'tests/test_export_paper_table.py'
       - '.github/workflows/codex-paper-check.yml'
   workflow_dispatch:
 jobs:
@@ -21,3 +23,5 @@ jobs:
           grep -Fq '\documentclass[runningheads]{llncs}' paper-template/main.tex
           grep -Fq '\author{}' paper-template/main.tex
           echo 'Scaffold present; full LNCS compile is performed in private Overleaf project.'
+      - name: Test CSV-to-LaTeX export
+        run: python -m unittest discover -s tests -p 'test_export_paper_table.py' -v
