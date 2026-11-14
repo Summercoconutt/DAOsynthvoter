@@ -1,0 +1,23 @@
+name: Codex paper-scaffold checks
+on:
+  pull_request:
+    paths:
+      - 'AGENTS.md'
+      - '.agents/skills/dao-paper/**'
+      - 'docs/RESEARCH_PAPER_WORKFLOW.md'
+      - 'paper-template/**'
+      - '.github/workflows/codex-paper-check.yml'
+  workflow_dispatch:
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check paper scaffold does not contain author identity
+        run: |
+          test -f AGENTS.md
+          test -f .agents/skills/dao-paper/SKILL.md
+          test -f paper-template/main.tex
+          grep -Fq '\documentclass[runningheads]{llncs}' paper-template/main.tex
+          grep -Fq '\author{}' paper-template/main.tex
+          echo 'Scaffold present; full LNCS compile is performed in private Overleaf project.'
