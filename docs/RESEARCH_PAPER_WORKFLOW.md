@@ -21,6 +21,12 @@ A. Research question → hypotheses, scope, desired comparisons and defensible b
 B. Data audit → Snapshot/DAO coverage, target construction, negative/extreme VP, leakage, overlap, time windows.
 C. Experiment audit → exact config/seed/code commit, valid train/validation/test process, class balance, majority baseline, numeric-only vs text models.
 D. Evidence package → figures and tables generated from source outputs, including input path/hash, run ID, metric definition, split and limitations.
+To export a CSV table from a verified evaluation artifact into a PRIVATE local folder:
+
+    python scripts/export_paper_table.py --input outputs/tables/eval/test/per_class_metrics.csv --output paper-private/tables/per_class.tex --caption "Held-out test results" --label "tab:per-class"
+
+This command is an example; inspect whether that source path exists. It writes a .tex table and .provenance.json with an input SHA-256 hash. It does NOT check whether numbers are scientifically valid. paper-private/ is excluded by .gitignore.
+
 E. Private LaTeX draft → introduction, related work, data, method, experiments, results, limitations, conclusion.
 F. Technical and submission review → provenance check, references, anonymity, layout, 15-page cap for CAAW Full Paper (including references and appendices), PDF rendering.
 
