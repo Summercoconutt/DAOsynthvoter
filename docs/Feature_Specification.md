@@ -1,5 +1,8 @@
 # Feature Specification — DAO Behaviour Modelling Pipeline
 
+> This documents the historical voter-split feature schema, not the new
+> point-in-time protocol. See [the current audit](POINT_IN_TIME_DATA_AUDIT.md).
+
 **Branch:** `carlo_dev`  
 **Scope:** All features used across Stages 1–9, with emphasis on **Stage 8 model inputs** (leakage-safe, `feat_dim = 8`).  
 **Related:** `docs/Leakage_Audit.md`, `docs/SUPERVISOR_LEAKAGE_SAFE_GUIDE.md`

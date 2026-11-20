@@ -1,5 +1,9 @@
 # No-RoBERTa behaviour modelling — supervisor runbook
 
+> Historical voter-split protocol only. Append `--allow-legacy-voter-split` to
+> Stage 08/08b commands; these results do not satisfy the new chronological
+> protocol. See [the current audit](POINT_IN_TIME_DATA_AUDIT.md).
+
 **Branch: use `carlo_dev` only** (not `main`).
 
 ```bash

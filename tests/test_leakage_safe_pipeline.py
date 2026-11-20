@@ -31,7 +31,7 @@ from dao_governance.features.causal_clusters import (
 from dao_governance.modelling.preprocess import select_numeric_columns, select_numeric_columns_no_roberta
 from dao_governance.modelling.windows import WINDOW_GROUP_COLS, build_windows
 from dao_governance.data.proposal_sampling import build_lean_proposal_sample
-from pipeline.global_cleaning import _standardize_vote_columns, run_global_cleaning_stage
+from pipeline.global_cleaning import _standardize_vote_columns, clean_votes_table, run_global_cleaning_stage
 
 DAO_FIXTURE = ROOT / "src" / "dao_clustering_scripts" / "data" / "processed" / "dao_feature_table.csv"
 SPACES = ["ens.eth", "uniswapgovernance.eth"]
@@ -145,6 +145,25 @@ class TestPriorVoteFractions:
         pd.testing.assert_series_equal(
             before.loc[:1, "prior_frac_against"], after.loc[:1, "prior_frac_against"]
         )
+
+    def test_equal_timestamps_are_not_prior_history(self):
+        df = pd.DataFrame(
+            [
+                {"voter": "v1", "space": "a.eth", "proposal_id": "p1", "vote_ts": "2023-01-01", "label_id": 0},
+                {"voter": "v1", "space": "a.eth", "proposal_id": "p2", "vote_ts": "2023-01-01", "label_id": 1},
+                {"voter": "v1", "space": "a.eth", "proposal_id": "p3", "vote_ts": "2023-01-02", "label_id": 2},
+            ]
+        )
+        out = add_prior_vote_fractions(df)
+        assert out["prior_frac_for"].tolist() == [0.0, 0.0, 0.5]
+        assert out["prior_frac_against"].tolist() == [0.0, 0.0, 0.5]
+
+    def test_invalid_timestamp_is_rejected(self):
+        df = pd.DataFrame(
+            [{"voter": "v1", "space": "a.eth", "vote_ts": None, "label_id": 0}]
+        )
+        with pytest.raises(ValueError, match="valid vote timestamps"):
+            add_prior_vote_fractions(df)
 
 
 class TestLeanProposalSample:
@@ -323,6 +342,43 @@ class TestBehaviourDataset:
         assert out.columns.tolist() == ["proposal_body"]
         assert out["proposal_body"].tolist() == ["Body text"]
 
+    def test_global_cleaning_uses_original_proposal_id(self):
+        votes = pd.DataFrame(
+            {
+                "Proposal ID": ["proposal-a", "proposal-b"],
+                "proposal_id": ["proposal-a_1700000000000", "proposal-b"],
+            }
+        )
+        out = _standardize_vote_columns(votes)
+        assert out["proposal_id"].tolist() == ["proposal-a", "proposal-b"]
+        assert "Proposal ID" not in out.columns
+
+    def test_global_cleaning_rejects_conflicting_proposal_ids(self):
+        votes = pd.DataFrame({"Proposal ID": ["proposal-a"], "proposal_id": ["proposal-b"]})
+        with pytest.raises(ValueError, match="Conflicting source and canonical proposal IDs"):
+            _standardize_vote_columns(votes)
+
+    def test_global_cleaning_uses_vote_timestamp_not_proposal_creation(self):
+        votes = pd.DataFrame(
+            {"created_time": ["2023-01-01"], "timestamp": ["2023-01-02"]}
+        )
+        out = _standardize_vote_columns(votes)
+        assert out["vote_timestamp"].tolist() == ["2023-01-02"]
+        assert out["created_time"].tolist() == ["2023-01-01"]
+
+    def test_global_cleaning_rejects_missing_vote_timestamp(self):
+        votes = pd.DataFrame({"created_time": ["2023-01-01"], "choice_norm": ["for"]})
+        with pytest.raises(ValueError, match="proposal creation time is not a vote timestamp"):
+            clean_votes_table(
+                votes,
+                dedupe_keys=[],
+                valid_choice_norm=["for"],
+                drop_invalid_timestamp=True,
+                negative_policy="drop",
+                extreme_quantile=0.999,
+                flag_extreme=False,
+            )
+
     def test_title_body_text_mode_combines_title_and_canonical_body(self, synthetic_parquet: Path):
         df, _ = build_behaviour_dataset(synthetic_parquet, text_mode="title_body")
         assert df["text"].iloc[0] == "[TITLE] Proposal 0 in ens.eth [BODY] Body 0 in ens.eth"
@@ -419,3 +475,22 @@ class TestIntegrationPrepareSplits:
         no_roberta_windows = build_windows(no_roberta_train, window_size=3, numeric_cols=no_roberta_cols)
         assert no_roberta_windows
         assert len(no_roberta_windows[0].window_features[0]) == len(no_roberta_cols) + 4
+
+def test_no_cluster_preparation_needs_no_dao_feature_table():
+    raw = _synthetic_votes(n_voters=12, votes_per_pair=3)
+    raw["vote_ts"] = pd.to_datetime(raw["vote_timestamp"], utc=True)
+    raw["label_id"] = raw["choice_norm"].map({"for": 0, "against": 1, "abstain": 2})
+    raw["text"] = raw["proposal_title"]
+    _, _, _, _, bundle, train, val, test = prepare_behaviour_splits(
+        raw,
+        dao_feature_table_path=None,
+        train_frac=0.7,
+        val_frac=0.15,
+        seed=42,
+        upper_quantile_cap=0.999,
+        absolute_cap=1e18,
+        use_dao_clusters=False,
+        use_voter_clusters=False,
+    )
+    assert not bundle.use_dao_clusters and not bundle.use_voter_clusters
+    assert all((part["dao_cluster"] == -1).all() for part in (train, val, test))

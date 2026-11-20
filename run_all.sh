@@ -3,6 +3,11 @@
 # Usage: ./run_all.sh [config] [data-sources-config] [run-id] [fine-tune|frozen]
 set -euo pipefail
 
+if [[ "${ALLOW_LEGACY_VOTER_SPLIT:-0}" != "1" ]]; then
+  printf 'The historical runner uses a non-chronological voter split. Set ALLOW_LEGACY_VOTER_SPLIT=1 only for legacy experiments.\n' >&2
+  exit 2
+fi
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 export PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
@@ -20,7 +25,7 @@ STAGE08_ARGS=(--config "$CONFIG" --data-sources-config "$DATA_SOURCES_CONFIG")
 printf '[run_all] Stage 08/08b run ID: %s; text encoder mode: %s\n' "$RUN_ID" "$TEXT_ENCODER_MODE"
 
 # Optional preflight: uncomment --skip-raw-scan when raw archives are unavailable locally.
-# python scripts/10_run_detection_mode.py "${COMMON_ARGS[@]}" --skip-raw-scan
+# python scripts/10_run_detection_mode.py "${PIPELINE_ARGS[@]}" --skip-raw-scan
 
 # python scripts/01_run_data_selection.py "${PIPELINE_ARGS[@]}" # Optional: omit if selected_spaces.json already exists.
 # python scripts/02_run_data_expansion.py "${PIPELINE_ARGS[@]}" # Optional: omit when a merged vote parquet is already configured.
@@ -34,8 +39,8 @@ printf '[run_all] Stage 08/08b run ID: %s; text encoder mode: %s\n' "$RUN_ID" "$
 # Keep the dataset and split identical between the two runs; only the BERT inclusion changes.
 # The run ID isolates every generated file. 08b consumes the exact 08 dataset and split.
 python scripts/08_run_behaviour_modelling.py "${STAGE08_ARGS[@]}" --run-id "$RUN_ID" \
-  --text-encoder-mode "$TEXT_ENCODER_MODE"
+  --text-encoder-mode "$TEXT_ENCODER_MODE" --allow-legacy-voter-split
 python scripts/08b_run_behaviour_modelling_no_roberta.py "${STAGE08_ARGS[@]}" --run-id "$RUN_ID" \
-  --text-encoder-mode "$TEXT_ENCODER_MODE"
+  --text-encoder-mode "$TEXT_ENCODER_MODE" --allow-legacy-voter-split
 python scripts/09_run_behaviour_evaluation.py "${STAGE08_ARGS[@]}" --run-id "$RUN_ID" \
   --text-encoder-mode "$TEXT_ENCODER_MODE" --split test val

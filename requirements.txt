@@ -4,6 +4,8 @@ numpy>=1.24.0
 pyarrow>=14.0.0
 polars>=0.20.0
 PyYAML>=6.0
+requests>=2.31.0
+Pillow>=10.0.0
 tqdm>=4.66.0
 openpyxl>=3.1.0
 
@@ -24,7 +26,6 @@ pytest>=7.4.0
 duckdb>=1.0.0
 
 # Optional: data expansion (dao_eligible_reconstruct_full.py)
-# requests>=2.31.0
 # web3>=6.0.0
 
 # Optional: HDBSCAN path in voter clustering

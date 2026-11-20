@@ -1,5 +1,9 @@
 # Supervisor Runbook — Leakage-Safe Behaviour Modelling (`carlo_dev`)
 
+> Historical voter-split protocol only: it is not point-in-time or
+> proposal-disjoint. Append `--allow-legacy-voter-split` to Stage 08/08b commands.
+> See [the current audit](POINT_IN_TIME_DATA_AUDIT.md).
+
 This guide is for supervisors and reviewers reproducing **Stage 8 behaviour prediction** on the lab server.
 
 **Repository:** https://github.com/Summercoconutt/DAOsynthvoter/tree/carlo_dev

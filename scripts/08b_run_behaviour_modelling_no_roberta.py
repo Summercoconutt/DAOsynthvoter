@@ -7,11 +7,11 @@ Compare against the existing RoBERTa pipeline without modifying it.
   cd whole_pipeline
   set PYTHONPATH=src
     python scripts/08b_run_behaviour_modelling_no_roberta.py --config configs/default.yaml \\
-            --data-sources-config configs/data_sources.yaml --run-id full_trial_01
+            --data-sources-config configs/data_sources.yaml --run-id full_trial_01 --allow-legacy-voter-split
 
 Quick smoke test:
   python scripts/08b_run_behaviour_modelling_no_roberta.py --config configs/default.yaml \\
-    --extra-config configs/smoke_no_roberta.yaml --run-id smoke-no-roberta \\
+    --extra-config configs/smoke_no_roberta.yaml --run-id smoke-no-roberta --allow-legacy-voter-split \\
       --max-train-windows 320 --max-valid-windows 96
 """
 from __future__ import annotations
@@ -49,7 +49,7 @@ from dao_governance.modelling.dataset import (
     numeric_collate_fn,
 )
 from dao_governance.modelling.metrics import macro_prf
-from dao_governance.modelling.model import NumericOnlyTimeSeriesClassifier
+from dao_governance.modelling.model import NumericOnlyTimeSeriesClassifier, copy_state_dict_to_cpu
 from dao_governance.modelling.preprocess import (
     assert_finite_feature_columns,
     load_split_manifest,
@@ -279,6 +279,8 @@ def main() -> None:
     ap.add_argument("--data-sources-config", type=str, default="configs/data_sources.yaml")
     ap.add_argument("--extra-config", type=str, default="")
     ap.add_argument("--run-id", required=True, help="The existing Stage 08 run ID to pair with.")
+    ap.add_argument("--allow-legacy-voter-split", action="store_true",
+                    help="Explicitly opt into the historical, non-chronological voter split.")
     ap.add_argument(
         "--text-encoder-mode",
         choices=("fine-tune", "frozen"),
@@ -318,6 +320,8 @@ def main() -> None:
         help="Cap validation windows (overrides config; 0 = no cap).",
     )
     args = ap.parse_args()
+    if not args.allow_legacy_voter_split:
+        ap.error("Stage 08b uses a legacy voter split; pass --allow-legacy-voter-split only for historical experiments.")
 
     _log_phase("starting no-RoBERTa behaviour modelling run")
     base = project_root()
@@ -375,7 +379,8 @@ def main() -> None:
     cluster_dir = run_root / "shared" / "predictive_clusters_08b"
     out_dir = stage_dir
     split_path = run_root / "shared" / "split_manifest.json"
-    dao_feat = resolve_artifact_path(run_root, stage08_config.get("dao_feature_table", ""))
+    dao_feat_path = stage08_config.get("dao_feature_table")
+    dao_feat = resolve_artifact_path(run_root, dao_feat_path) if dao_feat_path else None
     prep_report = reports_dir / "preprocessing_report.md"
     train_report = reports_dir / "training_report.md"
     if not behaviour_csv.is_file() or not stage08_enriched_csv.is_file() or not split_path.is_file():
@@ -464,7 +469,7 @@ def main() -> None:
         print(f"[08b] Large-dataset mode (CSV {cache_csv.stat().st_size / 1e9:.1f} GB), split manifest: {split_path}")
         prep_report.write_text(
             "# Preprocessing report (No-RoBERTa)\n\n"
-            f"- Leakage-safe cache CSV: `{cache_csv}`\n"
+            f"- Legacy voter-split cache CSV: `{cache_csv}`\n"
             f"- Model numeric columns: **{NUMERIC_COLUMNS}**\n",
             encoding="utf-8",
         )
@@ -509,7 +514,7 @@ def main() -> None:
 
         prep_report.write_text(
             "# Preprocessing report (No-RoBERTa)\n\n"
-            f"- Leakage-safe: **train-only structural clusters**\n"
+            f"- Legacy voter split with train-fitted structural clusters; not point-in-time safe.\n"
             f"- Voting power cap (quantile {upper_q}): **{preprocessor['voting_power']['cap_value']}**\n"
             f"- Model numeric columns: **{NUMERIC_COLUMNS}**\n"
             f"- Cluster meta: **{cluster_bundle.meta}**\n",
@@ -643,7 +648,7 @@ def main() -> None:
 
         if valid_m["f1"] > best_f1:
             best_f1 = valid_m["f1"]
-            best_state = {k: v.cpu() for k, v in model.state_dict().items()}
+            best_state = copy_state_dict_to_cpu(model)
 
     out_dir.mkdir(parents=True, exist_ok=True)
     if best_state is not None:
@@ -672,7 +677,8 @@ def main() -> None:
         "epochs": epochs,
         "lr": lr,
         "window_cache_dir": cache_dir.relative_to(run_root).as_posix() if use_cache else "",
-        "leakage_safe": True,
+        "leakage_safe": False,
+        "split_protocol": "legacy_voter_disjoint",
         "numeric_columns": NUMERIC_COLUMNS,
         "cluster_artifacts_dir": cluster_dir.relative_to(run_root).as_posix(),
         "enriched_behaviour_csv": enriched_csv.relative_to(run_root).as_posix(),

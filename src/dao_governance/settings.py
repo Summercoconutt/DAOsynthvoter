@@ -73,6 +73,16 @@ def project_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+def require_local_data_path(path: Path, *, root: Path | None = None) -> Path:
+    base = root or project_root()
+    resolved = path.resolve() if path.is_absolute() else (base / path).resolve()
+    try:
+        resolved.relative_to((base / "data").resolve())
+    except ValueError as exc:
+        raise ValueError("Local-only research inputs must remain under the data directory.") from exc
+    return resolved
+
+
 def resolve_path(cfg: Dict[str, Any], key: str, relative_to: Path | None = None) -> Path:
     """Resolve a path string from cfg['paths'][key] relative to project root."""
     base = relative_to or project_root()

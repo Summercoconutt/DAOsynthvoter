@@ -1,5 +1,8 @@
 # Leakage Audit — Behaviour Modelling Pipeline
 
+> Historical audit: the voter-split implementation described below is not
+> point-in-time or proposal-disjoint. See [the current audit](POINT_IN_TIME_DATA_AUDIT.md).
+
 **Branch:** `carlo_dev` (leakage-safe implementation)  
 **Audit date:** 2026-07  
 **Related:** `docs/Feature_Specification.md`, `tests/test_leakage_safe_pipeline.py`

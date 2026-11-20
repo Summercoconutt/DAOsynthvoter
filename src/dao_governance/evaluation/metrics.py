@@ -60,7 +60,7 @@ def compute_classification_metrics(
         "n_samples": int(len(y_true_arr)),
         "accuracy": float(accuracy_score(y_true_arr, y_pred_arr)),
         "balanced_accuracy": float(balanced_accuracy_score(y_true_arr, y_pred_arr)),
-        "macro_f1": float(f1_score(y_true_arr, y_pred_arr, average="macro", zero_division=0)),
+        "macro_f1": float(f1_score(y_true_arr, y_pred_arr, labels=labels, average="macro", zero_division=0)),
         "weighted_f1": float(f1_score(y_true_arr, y_pred_arr, average="weighted", zero_division=0)),
         "micro_f1": float(f1_score(y_true_arr, y_pred_arr, average="micro", zero_division=0)),
         "matthews_corrcoef": float(matthews_corrcoef(y_true_arr, y_pred_arr)),

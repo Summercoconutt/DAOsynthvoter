@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-8) Build behaviour dataset (optional), train voter-choice model with safeguards.
+8) Train the historical voter-split model.
 
-Leakage-safe flow: split -> train-only structural clusters -> causal windows.
+This legacy protocol is not proposal-disjoint or point-in-time safe.
 
   cd whole_pipeline
   set PYTHONPATH=src
     python scripts/08_run_behaviour_modelling.py --config configs/default.yaml \\
-            --data-sources-config configs/data_sources.yaml --run-id full_trial_01
+            --data-sources-config configs/data_sources.yaml --run-id full_trial_01 --allow-legacy-voter-split
 """
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ from dao_governance.modelling.dataset import (
     collate_fn,
 )
 from dao_governance.modelling.metrics import macro_prf
-from dao_governance.modelling.model import TimeSeriesClassifier
+from dao_governance.modelling.model import TimeSeriesClassifier, copy_state_dict_to_cpu
 from dao_governance.modelling.preprocess import (
     assert_finite_feature_columns,
     save_split_manifest,
@@ -112,6 +112,8 @@ def main() -> None:
     ap.add_argument("--data-sources-config", type=str, default="configs/data_sources.yaml")
     ap.add_argument("--extra-config", type=str, default="")
     ap.add_argument("--run-id", required=True, help="Unique immutable identifier for this full/lean 08+08b run.")
+    ap.add_argument("--allow-legacy-voter-split", action="store_true",
+                    help="Explicitly opt into the historical, non-chronological voter split.")
     ap.add_argument(
         "--text-encoder-mode",
         choices=("fine-tune", "frozen"),
@@ -123,6 +125,8 @@ def main() -> None:
     ap.add_argument("--save-behaviour-copy", nargs="?", const="", default=None, metavar="TAG",
                     help="Save a byte-for-byte copy as behaviour_dataset_with_clusters_08_[TAG].csv.")
     args = ap.parse_args()
+    if not args.allow_legacy_voter_split:
+        ap.error("Stage 08 uses a legacy voter split; pass --allow-legacy-voter-split only for historical experiments.")
 
     _log_phase("starting behaviour modelling run")
     base = project_root()
@@ -197,8 +201,8 @@ def main() -> None:
     behaviour_csv = input_dir / "behaviour_dataset.csv"
     enriched_csv = stage_dir / "enriched_behaviour.csv"
     master_parquet = configured_inputs["cleaned_master_parquet"]
-    source_dao_feat = configured_inputs["dao_feature_table"]
-    dao_feat = input_dir / f"dao_feature_table{source_dao_feat.suffix}"
+    source_dao_feat = configured_inputs.get("dao_feature_table")
+    dao_feat = input_dir / f"dao_feature_table{source_dao_feat.suffix}" if source_dao_feat else None
     split_path = run_root / "shared" / "split_manifest.json"
     out_dir = stage_dir
     prep_report = reports_dir / "preprocessing_report.md"
@@ -206,7 +210,8 @@ def main() -> None:
     quality_report = reports_dir / "behaviour_dataset_quality.md"
     run_stage_report = reports_dir / "stage08_behaviour_modelling.md"
     input_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source_dao_feat, dao_feat)
+    if source_dao_feat is not None and dao_feat is not None:
+        shutil.copy2(source_dao_feat, dao_feat)
     if "reused_behaviour_dataset" in configured_inputs:
         shutil.copy2(configured_inputs["reused_behaviour_dataset"], behaviour_csv)
         source_meta = _behaviour_csv_meta_path(configured_inputs["reused_behaviour_dataset"])
@@ -278,7 +283,7 @@ def main() -> None:
 
     prep_report.write_text(
         "# Preprocessing report\n\n"
-        f"- Leakage-safe: **train-only structural clusters**, `(voter, space)` windows\n"
+        f"- Legacy voter split with train-fitted structural clusters and `(voter, space)` windows; not point-in-time safe.\n"
         f"- Voting power cap (quantile {dq.get('upper_quantile_cap', 0.999)}): **{preprocessor['voting_power']['cap_value']}**\n"
         f"- Transform: **{preprocessor['voting_power'].get('transform', 'clip_then_log1p_robust')}**\n"
         f"- Model numeric columns: **{select_numeric_columns()}**\n"
@@ -449,7 +454,7 @@ def main() -> None:
 
             if valid_m["f1"] > best_f1:
                 best_f1 = valid_m["f1"]
-                best_state = {k: v.cpu() for k, v in model.state_dict().items()}
+                best_state = copy_state_dict_to_cpu(model)
     finally:
         if embedding_cache is not None:
             train_ds.text_embeddings = None
@@ -484,10 +489,11 @@ def main() -> None:
         "run_id": run_id,
         "sample_variant": sample_variant,
         "run_root": ".",
-        "leakage_safe": True,
+        "leakage_safe": False,
+        "split_protocol": "legacy_voter_disjoint",
         "numeric_columns": select_numeric_columns(),
         "cluster_artifacts_dir": cluster_dir.relative_to(run_root).as_posix(),
-        "dao_feature_table": dao_feat.relative_to(run_root).as_posix(),
+        "dao_feature_table": dao_feat.relative_to(run_root).as_posix() if dao_feat else None,
         "use_dao_clusters": use_dao,
         "use_voter_clusters": use_voter,
         "enriched_behaviour_csv": enriched_csv.relative_to(run_root).as_posix(),
@@ -505,7 +511,7 @@ def main() -> None:
     run_stage_report.write_text(
         "\n".join(
             [
-                "# Stage 8 — Behaviour modelling (leakage-safe)",
+                "# Stage 8 — Historical voter-split behaviour modelling",
                 "",
                 f"- Model dir: `{out_dir}`",
                 f"- Cluster artifacts: `{cluster_dir}`",

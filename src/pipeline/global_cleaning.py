@@ -41,6 +41,7 @@ def _standardize_vote_columns(df: pd.DataFrame) -> pd.DataFrame:
         "Is Whale": "is_whale",
         "Aligned With Majority": "aligned_with_majority",
         "Vote Timestamp": "vote_timestamp",
+        "timestamp": "vote_timestamp",
         "Created Time": "created_time",
         "Vote Label": "vote_label",
         "Original Choice": "original_choice",
@@ -50,6 +51,25 @@ def _standardize_vote_columns(df: pd.DataFrame) -> pd.DataFrame:
             continue
         if dst not in out.columns:
             out = out.rename(columns={src: dst})
+            continue
+        if src == "Proposal ID":
+            source_id = out[src].astype("string").str.strip()
+            existing_id = out[dst].astype("string").str.strip()
+            has_source = source_id.notna() & source_id.ne("")
+            has_existing = existing_id.notna() & existing_id.ne("")
+            filename_id = existing_id.str.replace(r"_\d{10,}$", "", regex=True)
+            mismatch = (
+                has_source
+                & has_existing
+                & existing_id.ne(source_id)
+                & filename_id.ne(source_id)
+            ).fillna(False)
+            if mismatch.any():
+                raise ValueError(
+                    f"Conflicting source and canonical proposal IDs in {int(mismatch.sum())} rows."
+                )
+            out[dst] = out[dst].where(~has_source, source_id)
+            out = out.drop(columns=[src])
             continue
         # If both alias and canonical exist, preserve canonical and backfill nulls.
         out[dst] = out[dst].where(out[dst].notna(), out[src])
@@ -61,10 +81,6 @@ def _ensure_choice_norm_like_prepare(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     if "choice_norm" not in out.columns and "choice" in out.columns:
         out["choice_norm"] = out["choice"].astype(str).str.lower().str.strip()
-    if "vote_timestamp" not in out.columns and "created_time" in out.columns:
-        out["vote_timestamp"] = out["created_time"]
-    if "created_time" not in out.columns and "vote_timestamp" in out.columns:
-        out["created_time"] = out["vote_timestamp"]
     return out
 
 
@@ -81,6 +97,8 @@ def clean_votes_table(
     summary = GlobalCleanSummary()
     summary.votes_rows_in = len(df)
     work = _ensure_choice_norm_like_prepare(df)
+    if drop_invalid_timestamp and not {"vote_timestamp", "vote_ts"}.intersection(work.columns):
+        raise ValueError("A vote timestamp is required; proposal creation time is not a vote timestamp.")
 
     if "voting_power" in work.columns:
         vp = pd.to_numeric(work["voting_power"], errors="coerce")

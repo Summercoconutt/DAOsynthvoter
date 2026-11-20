@@ -6,6 +6,7 @@ from dao_governance.modelling.run_artifacts import (
     create_run,
     record_stage,
     resolve_run_root,
+    resolve_stage_inputs,
     verify_recorded_artifacts,
 )
 
@@ -59,3 +60,16 @@ def test_manifest_refuses_reusing_run_root_and_verifies_artifacts(tmp_path: Path
 def test_run_id_rejects_path_traversal(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         resolve_run_root(tmp_path, {"run": {"sample_variant": "full"}}, "../outside")
+
+
+def test_disabled_dao_clusters_do_not_require_a_feature_table(tmp_path: Path) -> None:
+    source = tmp_path / "votes.parquet"
+    source.write_bytes(b"source")
+    cfg = {
+        "paths": {"cleaned_master_parquet": str(source)},
+        "behaviour_model": {"use_dao_clusters": False, "use_voter_clusters": False},
+    }
+    assert resolve_stage_inputs(tmp_path, cfg) == {"cleaned_master_parquet": source}
+    cfg["behaviour_model"]["use_dao_clusters"] = True
+    with pytest.raises(FileNotFoundError, match="DAO feature table"):
+        resolve_stage_inputs(tmp_path, cfg)

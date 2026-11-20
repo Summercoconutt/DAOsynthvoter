@@ -109,7 +109,7 @@ def _fill_median(df: pd.DataFrame, cols: Sequence[str]) -> pd.DataFrame:
 
 def fit_dao_clusters(
     train_df: pd.DataFrame,
-    dao_feature_table_path: Path,
+    dao_feature_table_path: Optional[Path],
     *,
     use_clusters: bool = True,
 ) -> Tuple[Optional[RobustScaler], Optional[KMeans], List[str], pd.DataFrame]:
@@ -120,7 +120,7 @@ def fit_dao_clusters(
     if not use_clusters or train_df.empty:
         return None, None, [], pd.DataFrame(columns=["space", "dao_cluster"])
 
-    if not dao_feature_table_path.exists():
+    if dao_feature_table_path is None or not dao_feature_table_path.exists():
         raise FileNotFoundError(f"DAO feature table not found: {dao_feature_table_path}")
 
     if dao_feature_table_path.suffix.lower() == ".parquet":
@@ -281,7 +281,7 @@ def predict_voter_clusters(
 
 def fit_cluster_bundle(
     train_df: pd.DataFrame,
-    dao_feature_table_path: Path,
+    dao_feature_table_path: Optional[Path],
     *,
     use_dao_clusters: bool = True,
     use_voter_clusters: bool = True,
@@ -320,7 +320,7 @@ def fit_cluster_bundle(
 def assign_clusters_to_votes(
     df: pd.DataFrame,
     bundle: ClusterBundle,
-    dao_feature_table_path: Path,
+    dao_feature_table_path: Optional[Path],
     *,
     min_votes_per_pair: int = 5,
 ) -> pd.DataFrame:
@@ -335,6 +335,8 @@ def assign_clusters_to_votes(
         out = out.drop(columns=["voter_cluster"])
 
     if bundle.use_dao_clusters and bundle.dao_kmeans is not None:
+        if dao_feature_table_path is None:
+            raise ValueError("A DAO feature table is required when DAO clustering is enabled.")
         if dao_feature_table_path.suffix.lower() == ".parquet":
             dao_tbl = pd.read_parquet(dao_feature_table_path)
         else:

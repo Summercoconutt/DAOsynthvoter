@@ -18,6 +18,17 @@ outputs/
 # Data files — paths live in configs; attach large files separately if needed
 data/**/*.parquet
 data/**/*.csv
+data/**/*.parquet.audit.json
+data/**/*.parquet.meta.json
+data/**/*.parquet.dedupe.sqlite
+data/**/*.pkl
+data/**/*.pkl.meta.json
+data/interim/snapshot_proposal_metadata.jsonl
+data/interim/snapshot_proposal_metadata.jsonl.lock
+data/interim/snapshot_proposal_metadata_local.jsonl
+data/interim/snapshot_proposal_metadata_local.jsonl.binding.json
+data/processed/chronological_split_local_proxy.json
+data/processed/chronological_examples_local_proxy/
 *.parquet
 *.pt
 

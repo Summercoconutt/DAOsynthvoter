@@ -8,6 +8,10 @@ import torch.nn as nn
 from transformers import AutoModel
 
 
+def copy_state_dict_to_cpu(model: nn.Module) -> Dict[str, torch.Tensor]:
+    return {name: value.detach().cpu().clone() for name, value in model.state_dict().items()}
+
+
 class TimeSeriesClassifier(nn.Module):
     def __init__(
         self,

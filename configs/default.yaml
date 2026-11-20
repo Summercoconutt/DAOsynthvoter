@@ -12,9 +12,11 @@ paths:
   snapshot_votes_parquet: "data/interim/snapshot_votes.parquet"
   master_votes_parquet: "data/interim/master_votes.parquet"
   proposals_parquet: ""
+  proposal_metadata_jsonl: "data/interim/snapshot_proposal_metadata.jsonl"
 
   # --- Global cleaning outputs (never overwrite raw inputs; write new files) ---
   cleaned_master_parquet: "data/processed/votes_cleaned.parquet"
+  canonical_vote_events_parquet: "data/processed/canonical_vote_events.parquet"
   cleaned_master_lean_parquet: "data/processed/votes_cleaned_lean.parquet"
   cleaned_proposals_parquet: "data/processed/proposals_cleaned.parquet"
   lean_proposal_audit_csv: "data/processed/proposal_lean_audit.csv"

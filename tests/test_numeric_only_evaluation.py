@@ -1,10 +1,20 @@
 from pathlib import Path
 
 import pandas as pd
+import pytest
 import torch
 
 from dao_governance.evaluation.evaluate import _run_inference
+from dao_governance.evaluation.metrics import compute_classification_metrics
+from dao_governance.modelling.metrics import macro_prf
 from dao_governance.modelling.model import NumericOnlyTimeSeriesClassifier
+
+
+def test_macro_f1_includes_all_three_classes_when_one_is_absent() -> None:
+    y_true = [0, 0, 1, 1]
+    y_pred = [0, 0, 1, 1]
+    assert macro_prf(y_true, y_pred)["f1"] == pytest.approx(2 / 3)
+    assert compute_classification_metrics(y_true, y_pred)["macro_f1"] == pytest.approx(2 / 3)
 
 
 def test_numeric_only_inference_loads_and_builds_numeric_windows(tmp_path: Path) -> None:

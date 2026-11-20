@@ -36,6 +36,8 @@ def main() -> None:
     ap.add_argument("--run-id", type=str, default="", help="Unique Stage 08 output ID; generated if omitted.")
     ap.add_argument("--from-stage", type=int, default=1, help="Start at stage N (1–8).")
     ap.add_argument("--to-stage", type=int, default=8, help="End at stage N (1–8).")
+    ap.add_argument("--allow-legacy-voter-split", action="store_true",
+                    help="Explicitly opt into historical Stage 08 behaviour modelling.")
     args = ap.parse_args()
 
     env = os.environ.copy()
@@ -51,6 +53,8 @@ def main() -> None:
     print(f"Stage 08 run ID: {run_id}")
     if hi < lo:
         lo, hi = hi, lo
+    if lo <= 8 <= hi and not args.allow_legacy_voter_split:
+        ap.error("Stage 08 uses a legacy voter split; pass --allow-legacy-voter-split only for historical experiments.")
     if lo < 8 and args.extra_config:
         ap.error(
             "Stages 01–07 accept one extra YAML only; combine source and other overrides into one file, "
@@ -66,7 +70,7 @@ def main() -> None:
         elif i < 8 and not uses_default_sources:
             cmd.extend(["--extra-config", args.data_sources_config])
         if i == 8:
-            cmd.extend(["--data-sources-config", args.data_sources_config, "--run-id", run_id])
+            cmd.extend(["--data-sources-config", args.data_sources_config, "--run-id", run_id, "--allow-legacy-voter-split"])
             if args.extra_config:
                 cmd.extend(["--extra-config", args.extra_config])
         subprocess.run(

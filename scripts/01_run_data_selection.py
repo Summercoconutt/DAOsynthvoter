@@ -19,10 +19,12 @@ from dao_governance.settings import load_config, project_root
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", type=str, default="configs/default.yaml")
+    ap.add_argument("--extra-config", type=str, default="")
     args = ap.parse_args()
     base = project_root()
     cfg_path = (base / args.config).resolve() if not Path(args.config).is_absolute() else Path(args.config)
-    cfg = load_config(config_path=cfg_path)
+    extra = (base / args.extra_config).resolve() if args.extra_config else None
+    cfg = load_config(config_path=cfg_path, extra_path=extra)
     paths = cfg.get("paths", {})
     rep = (base / cfg.get("reports", {}).get("stage01_md", "outputs/reports/stage01_dao_selection.md")).resolve()
 
@@ -45,10 +47,12 @@ def main() -> None:
         data = json.loads(sel.read_text(encoding="utf-8"))
         if isinstance(data, list):
             spaces = data
-        elif isinstance(data, dict) and "spaces" in data:
-            spaces = data["spaces"]
+        elif isinstance(data, dict) and ("selected_space_ids" in data or "spaces" in data):
+            spaces = data.get("selected_space_ids", data.get("spaces", []))
         else:
-            spaces = []
+            raise ValueError(f"Unsupported selected DAO list format: {sel}")
+        if not isinstance(spaces, list):
+            raise ValueError(f"Selected DAO IDs must be a list: {sel}")
         lines.extend(
             [
                 "## Validation",

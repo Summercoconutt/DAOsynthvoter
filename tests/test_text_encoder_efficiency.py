@@ -19,7 +19,7 @@ from dao_governance.modelling.dataset import (
     build_frozen_text_embedding_cache,
     collate_fn,
 )
-from dao_governance.modelling.model import TimeSeriesClassifier
+from dao_governance.modelling.model import TimeSeriesClassifier, copy_state_dict_to_cpu
 
 
 class DummyTokenizer:
@@ -57,6 +57,15 @@ def _window(texts: list[str], label: int = 0):
         dao_cluster=0,
         voter_cluster=1,
     )
+
+
+def test_cpu_checkpoint_is_independent_of_later_updates():
+    model = nn.Linear(1, 1)
+    checkpoint = copy_state_dict_to_cpu(model)
+    expected = checkpoint["weight"].clone()
+    with torch.no_grad():
+        model.weight.add_(1)
+    assert torch.equal(checkpoint["weight"], expected)
 
 
 def test_window_dataset_pretokenizes_unique_texts_and_pads_per_batch():

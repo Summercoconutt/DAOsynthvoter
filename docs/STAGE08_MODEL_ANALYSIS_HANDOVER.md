@@ -1,5 +1,9 @@
 # Handover: Stage 08 model analysis and final report
 
+> These are historical voter-split runs, not evidence for the new chronological
+> protocol. To reproduce them, prefix `run_all.sh` with
+> `ALLOW_LEGACY_VOTER_SPLIT=1`. See [the current audit](POINT_IN_TIME_DATA_AUDIT.md).
+
 ## Purpose
 
 The repository currently contains four run roots under `outputs/stage08_runs/`: fine-tuned and frozen-encoder runs for both the **full** and **lean** sample variants. Each run root has paired Stage 08/08b models, run-matched evaluation, provenance, and data for model analysis. Analyse the trained behaviour models, diagnose them with explainable-AI (XAI) methods, and use the evidence to write the final report.

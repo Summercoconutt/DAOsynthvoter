@@ -25,6 +25,9 @@ from dao_governance.modelling.preprocess import (
 def add_prior_vote_fractions(df: pd.DataFrame) -> pd.DataFrame:
     """Add causal FOR and AGAINST fractions from earlier votes per voter-space."""
     out = df.copy()
+    out["vote_ts"] = pd.to_datetime(out["vote_ts"], utc=True, errors="coerce")
+    if out["vote_ts"].isna().any():
+        raise ValueError("Prior-vote fractions require valid vote timestamps.")
     out["prior_frac_for"] = 0.0
     out["prior_frac_against"] = 0.0
     out["_source_order"] = range(len(out))
@@ -37,9 +40,22 @@ def add_prior_vote_fractions(df: pd.DataFrame) -> pd.DataFrame:
     grouped = out.groupby(["voter", "space"], sort=False)
     for _, group in tqdm(grouped, total=grouped.ngroups, desc="prior-vote fractions"):
         ordered = group.sort_values(sort_cols, kind="mergesort")
-        prior_count = pd.Series(range(len(ordered)), index=ordered.index, dtype=float)
-        prior_for = (ordered["label_id"] == 0).cumsum().shift(fill_value=0)
-        prior_against = (ordered["label_id"] == 1).cumsum().shift(fill_value=0)
+        timestamps = ordered["vote_ts"]
+        prior_count = (
+            pd.Series(range(len(ordered)), index=ordered.index, dtype=float)
+            .groupby(timestamps, sort=False)
+            .transform("first")
+        )
+        prior_for = (
+            (ordered["label_id"] == 0).cumsum().shift(fill_value=0)
+            .groupby(timestamps, sort=False)
+            .transform("first")
+        )
+        prior_against = (
+            (ordered["label_id"] == 1).cumsum().shift(fill_value=0)
+            .groupby(timestamps, sort=False)
+            .transform("first")
+        )
         denominator = prior_count.where(prior_count > 0, 1.0)
         out.loc[ordered.index, "prior_frac_for"] = (prior_for / denominator).to_numpy()
         out.loc[ordered.index, "prior_frac_against"] = (prior_against / denominator).to_numpy()
@@ -50,7 +66,7 @@ def add_prior_vote_fractions(df: pd.DataFrame) -> pd.DataFrame:
 def prepare_behaviour_splits(
     raw_df: pd.DataFrame,
     *,
-    dao_feature_table_path: Path,
+    dao_feature_table_path: Path | None,
     train_frac: float,
     val_frac: float,
     seed: int,

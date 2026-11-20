@@ -61,6 +61,9 @@ def resolve_stage_inputs(base: Path, cfg: Dict[str, Any]) -> Dict[str, Path]:
             f"{cleaned_path}. Stage 08 will not fall back to another dataset."
         )
 
+    if not bool((cfg.get("behaviour_model") or {}).get("use_dao_clusters", True)):
+        return {"cleaned_master_parquet": cleaned_path}
+
     dao_csv = resolve(paths.get("dao_feature_table_csv", "data/processed/dao_feature_table.csv"))
     dao_parquet = resolve(paths.get("dao_feature_table_parquet", "data/processed/dao_feature_table.parquet"))
     dao_path = dao_csv if dao_csv.is_file() else dao_parquet

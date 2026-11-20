@@ -1,0 +1,12 @@
+# Local-only research inputs. Do not query external data services.
+run:
+  sample_variant: full
+  local_data_only: true
+
+paths:
+  master_votes_parquet: "data/interim/snapshot_votes.parquet"
+  cleaned_master_parquet: "data/processed/votes_cleaned_from_server.parquet"
+  canonical_vote_events_parquet: "data/processed/canonical_vote_events_local_proxy.parquet"
+  snapshot_spaces_root: ""
+  proposal_metadata_jsonl: "data/interim/snapshot_proposal_metadata_local.jsonl"
+  local_metadata_source_jsonl: "data/interim/snapshot_proposal_metadata.jsonl"

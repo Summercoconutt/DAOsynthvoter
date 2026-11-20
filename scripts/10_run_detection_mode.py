@@ -20,7 +20,7 @@ Typical workflow (server raw on D:\\111111\\Data, cleaning only locally):
 
 4. Confirm smoke train completes:
 
-     python scripts/10_run_detection_mode.py --smoke-train
+     python scripts/10_run_detection_mode.py --smoke-train --allow-legacy-voter-split
 """
 
 from __future__ import annotations
@@ -74,7 +74,11 @@ def main() -> None:
         action="store_true",
         help="Run smoke train even if prerequisite checks fail (debug only).",
     )
+    ap.add_argument("--allow-legacy-voter-split", action="store_true",
+                    help="Explicitly opt into the historical Stage 08 smoke model.")
     args = ap.parse_args()
+    if args.smoke_train and not args.allow_legacy_voter_split:
+        ap.error("The smoke model uses a legacy voter split; pass --allow-legacy-voter-split to opt in.")
 
     base = project_root()
     cfg_path = (base / args.config).resolve() if not Path(args.config).is_absolute() else Path(args.config)
@@ -177,7 +181,12 @@ def main() -> None:
             args.config,
             "--extra-config",
             "configs/smoke_behaviour.yaml",
+            "--run-id",
+            datetime.now(timezone.utc).strftime("smoke_%Y%m%dT%H%M%SZ"),
+            "--allow-legacy-voter-split",
         ]
+        if args.extra_config:
+            cmd.extend(["--data-sources-config", args.extra_config])
         print("[09] Running smoke train:", " ".join(cmd))
         subprocess.run(cmd, cwd=str(base), env=env, check=True)
         print("[09] Smoke train finished OK.")

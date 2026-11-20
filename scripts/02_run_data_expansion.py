@@ -18,10 +18,18 @@ from dao_governance.settings import load_config, project_root
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", type=str, default="configs/default.yaml")
+    ap.add_argument("--extra-config", type=str, default="")
+    ap.add_argument("--fetch-proposal-metadata", action="store_true")
+    ap.add_argument("--resume-metadata", action="store_true")
+    ap.add_argument("--metadata-limit", type=int, default=0, help="Limit proposal IDs for a pilot; 0 means all.")
+    ap.add_argument("--metadata-batch-size", type=int, default=100)
     args = ap.parse_args()
     base = project_root()
     cfg_path = (base / args.config).resolve() if not Path(args.config).is_absolute() else Path(args.config)
-    cfg = load_config(config_path=cfg_path)
+    extra = (base / args.extra_config).resolve() if args.extra_config else None
+    cfg = load_config(config_path=cfg_path, extra_path=extra)
+    if args.fetch_proposal_metadata and bool((cfg.get("run") or {}).get("local_data_only", False)):
+        ap.error("Proposal metadata fetching is disabled in local-data-only mode.")
     paths = cfg.get("paths", {})
     rep = (base / cfg.get("reports", {}).get("stage02_md", "outputs/reports/stage02_data_expansion.md")).resolve()
 
@@ -55,6 +63,27 @@ def main() -> None:
             "",
         ]
     )
+    if args.fetch_proposal_metadata:
+        from dao_governance.data.snapshot_metadata import collect_proposal_metadata
+
+        source = (base / paths.get("master_votes_parquet", "data/interim/master_votes.parquet")).resolve()
+        output = (base / paths.get("proposal_metadata_jsonl", "data/interim/snapshot_proposal_metadata.jsonl")).resolve()
+        counts = collect_proposal_metadata(
+            source,
+            output,
+            limit=args.metadata_limit,
+            batch_size=args.metadata_batch_size,
+            resume=args.resume_metadata,
+        )
+        lines.extend(
+            [
+                "## Public proposal metadata",
+                f"- Cache: `{output}`",
+                f"- Collection counts: `{counts}`",
+                "- Current metadata is not, by itself, proof of historical availability.",
+                "",
+            ]
+        )
 
     rep.parent.mkdir(parents=True, exist_ok=True)
     rep.write_text("\n".join(lines), encoding="utf-8")

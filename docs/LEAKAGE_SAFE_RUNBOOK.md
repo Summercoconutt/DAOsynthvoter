@@ -1,5 +1,9 @@
 # Leakage-safe behaviour modelling (Stage 8)
 
+> Historical voter-split protocol only: this is not point-in-time or
+> proposal-disjoint. Append `--allow-legacy-voter-split` to Stage 08/08b and
+> detection smoke commands. See [the current audit](POINT_IN_TIME_DATA_AUDIT.md).
+
 Stage 8 no longer uses Stage 6/7 cluster CSVs. It fits **train-only structural clusters** internally.
 
 **Branch:** `carlo_dev` on https://github.com/Summercoconutt/DAOsynthvoter
